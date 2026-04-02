@@ -1,0 +1,11 @@
+torch>=2.0
+fair-esm
+ablang2
+anarci
+numpy
+pandas
+scipy
+scikit-learn
+matplotlib
+seaborn
+wandb

@@ -1,0 +1,12 @@
+outputs/
+WORKFLOW_PERSONAL.md
+.env
+__pycache__/
+*.pyc
+*.pt
+*.pth
+.ipynb_checkpoints/
+.DS_Store
+wandb/
+.venv/
+.idea/
