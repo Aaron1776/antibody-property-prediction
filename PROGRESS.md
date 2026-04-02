@@ -282,6 +282,96 @@ FR mutations are dominated by lysozyme_2019_D441 (2094 total mutations, ~66% FR 
 
 Status: COMPLETE. All assertions passed. CSVs saved to data/ and committed to git on implementation branch.
 
+### Notebook 02: Model Exploration (02_model_exploration.ipynb)
+
+Status: IN PROGRESS -- ESM-2 section complete locally (MPS). AbLang2 section in progress.
+
+Purpose: verify all ESM-2 and AbLang2 API details before writing embedding generation code. Nothing is saved to disk from this notebook -- findings are documented here.
+
+#### ESM-2 vocabulary
+
+The full token vocabulary was inspected directly via `alphabet.tok_to_idx` (33 entries, indices 0-32):
+- 0: `<cls>` (BOS / Beginning of Sequence) -- always at position 0, shifts all residues right by 1
+- 1: `<pad>` -- fills shorter sequences in a batch; ignored during attention
+- 2: `<eos>` -- end of sequence marker
+- 3: `<unk>` -- unknown residue; if this appears in a forward pass the embedding at that position is uninformative
+- 4-23: the 20 standard amino acids
+- 24-28: ambiguous/non-standard AAs: X (any), B (Asp/Asn), U (selenocysteine), Z (Glu/Gln), O (pyrrolysine)
+- 29-30: MSA gap characters (`.`, `-`) -- irrelevant for single-sequence input
+- 31: `<null_1>` -- reserved placeholder, no defined function
+- 32: `<mask>` -- masked language model pretraining token; never appears in inference
+
+None of indices 24-31 are expected in AbAgym or SAbDab sequences. UNK (3) is the token to watch for -- its presence indicates a non-standard residue that was not handled upstream.
+
+#### ESM-2 forward pass shapes
+
+Single H+L forward pass on Ang2_2017_G6 (H=215 residues, L=213 residues):
+- Heavy repr: `(1, 217, 1280)` -- 215 + 2 (BOS + EOS) = 217 tokens, 1280-dim per position
+- Light repr: `(1, 215, 1280)` -- 213 + 2 = 215 tokens
+
+H and L are embedded in separate forward calls; their mean-pooled outputs are concatenated to form the 2560-dim sequence-level representation.
+
+#### ESM-2 residue indexing
+
+Verified on the first mutation in Ang2_2017_G6: H:P100A (PDB site `100A`).
+- `seq_idx = 103`: 0-based index into the 215-residue heavy chain string, returned by `get_mutation_site_index` via the ANARCI mapping
+- `token_pos = 104 = seq_idx + 1`: BOS at position 0 shifts all residues right by one
+- AA at seq_idx 103: `'P'` -- matches wildtype, confirming the ANARCI-derived index is correct
+- Residue embedding shape: `(1280,)`, norm = 10.13
+- BOS embedding norm = 10.03 -- differs from residue embedding (similar L2 magnitude is normal for ESM-2; the 1280-dimensional direction encodes residue identity, not the norm)
+
+#### ESM-2 throughput (MPS)
+
+Profiled across sequence lengths [50, 100, 150, 200, 250] and batch sizes [1, 8, 32, 64]. VRAM not available on MPS (Apple unified memory has no equivalent to `cuda.max_memory_allocated`).
+
+Key result: batching helps substantially up to bs=32; gains plateau or reverse above 32 at longer sequences, consistent with MPS memory bandwidth saturation. At the length most representative of our data (200 residues), bs=32 gives **0.054 sec/sample**.
+
+Estimated cost for 5318 residue-level embeddings at bs=32, length ~200: ~5 minutes on MPS. Colab CUDA (T4/A100) will be significantly faster. Recommendation: use bs=32 as default for NB03 ESM-2 embedding generation.
+
+#### AbLang2 load
+
+AbLang2-paired (Oxford) downloads as a `.tar` archive on first use. `ablang.AbRep` is the representation module; `ablang.tokenizer` handles encoding. No repr layer selection -- always returns final layer hidden states.
+
+Confirmed: SEP=25, PAD=21, hidden_dim=480, parameters=44,348,304 (~44M, ~15x smaller than ESM-2). Combined memory footprint with ESM-2 resident: ~2.5 GB + ~0.17 GB -- both models fit simultaneously on MPS.
+
+#### AbLang2 vocabulary
+
+Full vocabulary confirmed via `ablang.tokenizer.token_to_aa` (26 entries, indices 0-25): indices 1-20 are the 20 standard amino acids. Special tokens: start=0 (`<`), end=22 (`>`), pad=21 (`-`), sep=25 (`|`), mask=23 (`*`), unknown=24 (`X`).
+
+With `w_extra_tkns=False` (always used), start and end tokens are suppressed from output. If `w_extra_tkns=True` were used, start would appear at position 0 and shift all residues right by 1, replicating ESM-2's BOS layout. We always use `False` to avoid this offset.
+
+#### AbLang2 forward pass shapes
+
+Single H+L forward pass on Ang2_2017_G6 (H=215, L=213): output shape `(1, 429, 480)`. seq_len = 215 + 1 (SEP) + 213 = 429 exactly. No +2 for BOS/EOS. Both chains processed in one pass, allowing cross-chain attention -- architectural contrast with ESM-2's separate per-chain passes.
+
+#### AbLang2 chain boundary detection
+
+`get_chain_masks` locates the SEP token and constructs boolean masks for heavy and light residues. Confirmed on Ang2_2017_G6: SEP at position 215 = `len(heavy_seq)`, heavy mask covers 215 tokens, light mask covers 213 tokens. No overlap or leakage. Assertions passed.
+
+#### AbLang2 residue indexing
+
+Verified on same mutation as ESM-2: Ang2_2017_G6 H:P100A.
+- `seq_idx = 103`, `token_pos = 103` (heavy chain, no BOS offset)
+- Token id 13 = `'P'` -- matches wildtype, correct residue targeted
+- Not SEP (25), not PAD (21) -- clean residue token
+- Residue embedding: shape `(480,)`, norm = 7.25
+
+Critical comparison: same mutation, same seq_idx (103), but ESM-2 gives token_pos=104 (seq_idx+1 for BOS) while AbLang2 gives token_pos=103 (seq_idx directly). This difference is handled in `embed_sequences_residue` for each model separately.
+
+#### AbLang2 throughput (MPS)
+
+Profiled across same lengths and batch sizes as ESM-2. AbLang2 is ~10x faster than ESM-2 at bs=1 and ~2x faster at bs=32 for length=200, consistent with 15x parameter count difference.
+
+First-call anomaly: length=50, bs=1 reported 0.524 sec -- MPS JIT compilation on first forward pass, not representative. Subsequent calls show steady-state performance (~0.02-0.05 sec/sample).
+
+Batching saturates earlier than ESM-2: at length=200, bs=8 is fastest (0.019 sec/sample); larger batches do not improve throughput. At length=250, bs=32: 0.025 sec/sample. AbLang2 processes paired sequences (~429 tokens for Ang2) in practice, so real-world cost is above the profiled range. Estimated cost for 5318 embeddings: ~2-3 minutes on MPS.
+
+Recommendation: use bs=32 for NB03 AbLang2 embedding generation (consistent with ESM-2 recommendation). Discard first-batch timing on Colab.
+
+Status: COMPLETE (local MPS run). All API details verified for both models.
+
+---
+
 ### Notebook 2: ESM-2 Sequence-Level Embeddings
 
 Status: NOT YET RUN IN NEW WORKSPACE. Prior Colab outputs exist at old Drive path (DL_Final_Project/embeddings/) but are not accessible via the new DRIVE_ROOT (DL_Final_Project/Antibody_Project/). Must re-run after NB01 completes.
