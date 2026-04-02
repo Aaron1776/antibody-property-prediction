@@ -1,4 +1,5 @@
 outputs/
+
 WORKFLOW_PERSONAL.md
 .env
 __pycache__/

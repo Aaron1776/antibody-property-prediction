@@ -2,16 +2,32 @@ from pathlib import Path
 import torch
 import numpy as np
 
-DRIVE_ROOT = Path('/content/drive/MyDrive/DL_Final_Project')
-# DATA_DIR is in the repo itself (data/ at repo root) so it is accessible
-# after git clone without requiring Drive to be mounted.
-DATA_DIR = Path(__file__).parent.parent / 'data'
+_COLAB_DRIVE = Path('/content/drive/MyDrive/DL_Final_Project')
+_REPO_ROOT = Path(__file__).parent.parent
+
+# DATA_DIR is in the repo itself so it is accessible after git clone
+# without requiring Drive to be mounted.
+DATA_DIR = _REPO_ROOT / 'data'
+
+# Embeddings, results, and checkpoints live on Drive in Colab.
+# Locally they fall back to outputs/ at the repo root (gitignored).
+if _COLAB_DRIVE.exists():
+    DRIVE_ROOT = _COLAB_DRIVE
+else:
+    DRIVE_ROOT = _REPO_ROOT / 'outputs'
+
 EMBEDDING_DIR = DRIVE_ROOT / 'embeddings'
 RESULTS_DIR = DRIVE_ROOT / 'results'
 CHECKPOINT_DIR = DRIVE_ROOT / 'checkpoints'
 FIGURES_DIR = RESULTS_DIR / 'figures'
 
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+# Device detection: CUDA > MPS (Apple Silicon) > CPU
+if torch.cuda.is_available():
+    DEVICE = 'cuda'
+elif torch.backends.mps.is_available():
+    DEVICE = 'mps'
+else:
+    DEVICE = 'cpu'
 
 ESM2_MODEL_NAME = 'esm2_t33_650M_UR50D'
 
