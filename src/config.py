@@ -2,17 +2,29 @@ from pathlib import Path
 import torch
 import numpy as np
 
-_COLAB_DRIVE = Path('/content/drive/MyDrive/DL_Final_Project')
 _REPO_ROOT = Path(__file__).parent.parent
 
 # DATA_DIR is in the repo itself so it is accessible after git clone
 # without requiring Drive to be mounted.
 DATA_DIR = _REPO_ROOT / 'data'
 
-# Embeddings, results, and checkpoints live on Drive in Colab.
-# Locally they fall back to outputs/ at the repo root (gitignored).
+# DRIVE_ROOT resolution order:
+#   1. Colab: /content/drive/MyDrive/DL_Final_Project/Antibody_Project
+#   2. Local Mac with Google Drive Desktop mounted (email-agnostic glob)
+#   3. Fallback: outputs/ at repo root (gitignored)
+_COLAB_DRIVE = Path('/content/drive/MyDrive/DL_Final_Project/Antibody_Project')
+
+_gdrive_candidates = sorted(
+    Path.home().glob(
+        'Library/CloudStorage/GoogleDrive-*/My Drive/DL_Final_Project/Antibody_Project'
+    )
+)
+_LOCAL_DRIVE = _gdrive_candidates[0] if _gdrive_candidates else None
+
 if _COLAB_DRIVE.exists():
     DRIVE_ROOT = _COLAB_DRIVE
+elif _LOCAL_DRIVE is not None and _LOCAL_DRIVE.exists():
+    DRIVE_ROOT = _LOCAL_DRIVE
 else:
     DRIVE_ROOT = _REPO_ROOT / 'outputs'
 

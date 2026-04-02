@@ -40,6 +40,7 @@ Experiments 2, 3, 5, 6 require residue-level embeddings (to be generated in NB03
 ### Task 1: AbAgym -- Antibody Mutation Effect Prediction
 
 - Source: github.com/3BioCompBio/AbAgym
+- Repo structure: PDB files in `PDB_files.zip` (extracts to `DMS_big_table_PDB_files/`), DMS data in `AbAgym_data_non-redundant.csv.zip`. No per-antibody CSVs. Full CSV also available (`AbAgym_data_full.csv.zip`) but non-redundant used -- column names already match our schema (`chains`, `mut_names`) and row counts for our 5 datasets are identical.
 - 5 antibody-side DMS datasets, 5,318 mutations total:
   - Ang2_2017_G6: 981 mutations (79% CDR, 21% FR, G6 scaffold)
   - EGFR_2013_Cetuximab: 1,071 mutations (65% CDR, 35% FR)
@@ -203,18 +204,87 @@ Columns: Antibody_ID, heavy_seq, light_seq, Antigen_ID, Antigen, Y, pKd
 
 ### Notebook 1: Data Pipeline
 
-Status: EXPECTED COMPLETE (re-verify by running src/data/ modules)
+Status: IN PROGRESS -- running locally. ANARCI mappings verified. SAbDab download, mutant reconstruction, and CSV save pending.
 
-Produced:
-- abagym_antibody.csv (5,318 rows, 14 columns)
-- abagym_sequences.csv (5 rows)
-- sabdab_affinity.csv (491 rows)
-- Mutant sequence reconstruction
-- PDB->IMGT->CDR/FR mapping, region column
+#### AbAgym data source
+
+The AbAgym GitHub repo does not contain per-antibody CSV files. The actual structure is:
+
+| File | Rows | Notes |
+|---|---|---|
+| `AbAgym_data_full.csv.zip` | 572,719 | All 68 experiments, all mutations. Columns: `chain`, `mut_name` (singular) |
+| `AbAgym_data_non-redundant.csv.zip` | 323,752 | Redundant experiments removed at dataset level. Columns: `chains`, `mut_names` (plural) |
+| `AbAgym_data_full_interface.csv` | 37,259 | Full dataset, interface-adjacent residues only |
+| `AbAgym_data_non-redundant_interface.csv` | 36,541 | Non-redundant, interface residues only |
+| `AbAgym_metadata.csv` | 68 | One row per experiment, includes antigen, PDB ID, DOI |
+| `PDB_files.zip` | 68 PDB files | Extracts to `DMS_big_table_PDB_files/`. One processed PDB per experiment, chains renamed to H and L. |
+
+Decision: use `AbAgym_data_non-redundant.csv.zip`. Rationale: (1) column names already match our schema (`chains`, `mut_names`) so no renaming needed; (2) row counts for our 5 datasets are identical in both zip files (5318 total), so the non-redundant filter removed nothing from our subset.
+
+Interface-adjacent residues: residues within a small distance threshold of the antibody-antigen binding interface, measured by `closest_interface_atom_distance` (in Angstroms). The interface CSVs filter to these only. We use the full (non-interface-filtered) CSV to preserve the full CDR/FR signal range -- in particular, framework mutations far from the interface are the primary source of the CDR constraint gradient.
+
+#### Site column dtype
+
+The `site` column must be read with `dtype={'site': str}`. Default numeric parsing silently converts insertion code sites (e.g. `'100A'`, `'30A'`, `'52A'`) to NaN. Confirmed insertion code sites in Ang2_2017_G6: `100A`, `100B`, `30A`, `52A`.
+
+#### ANARCI mapping pipeline
+
+PDB numbering is arbitrary -- residue labels are assigned by the depositor and differ across structures. Insertion codes (e.g. `100A`) are a patch to insert extra residues without renumbering existing ones. Two antibodies can both have a residue called `28` that are in completely different structural contexts.
+
+ANARCI resolves this by aligning each chain sequence to a curated antibody reference and assigning standardized IMGT position numbers. Once IMGT positions are assigned, CDR/FR assignment is a fixed lookup (CDR1: 27-38, CDR2: 56-65, CDR3: 105-117 for both H and L).
+
+Implementation: `anarci.anarci([(seq_id, sequence)], scheme='imgt')`. Returns `(numbering_list, seqstart, seqend)` where `seqstart` is the index into the full chain sequence where the variable domain begins. This matters because some PDB structures include constant domain residues before the variable domain. `seq_idx = seqstart + i` gives the 0-based index into the full amino acid string, which is what the embedding models need.
+
+Verified chain residue counts (full PDB chain, including any constant domain residues):
+
+| DMS name | H residues | L residues |
+|---|---|---|
+| Ang2_2017_G6 | 215 | 213 |
+| EGFR_2013_Cetuximab | 220 | 211 |
+| lysozyme_2019_D441 | 218 | 214 |
+| VEGF_2017b_G6 | 211 | 213 |
+| HER2_2021_trastuzumab | 220 | 214 |
+
+Spot-check (canonical verification): Ang2_2017_G6 chain H, PDB site `100A` → IMGT 113 → CDR_H3, seq_idx=104. IMGT 113 falls within CDR_H3 range (105-117). Consistent with prior notebook output.
+
+#### SAbDab pipeline
+
+Raw Zenodo CSV: 493 rows, 5 columns (`Antibody_ID`, `Antibody`, `Antigen_ID`, `Antigen`, `Y`). `Y` is raw Kd in molar units (median ~6.2e-9 M, i.e. ~6.2 nM). `parse_sabdab_raw` derives `pKd = -log10(Y)` and splits the `Antibody` column (Python list literal) into `heavy_seq` and `light_seq`. Two full-IgG entries dropped (6d6u, 6d6t -- anomalously long sequences). 97 sequences had artifacts stripped (N/C-terminal His-tags, TEV sites, GGGGS linkers, FLAG, StrepII, Factor Xa, thrombin sites). Final: 491 rows.
+
+pKd summary: mean=8.23, std=1.50, min=3.70, max=12.40. Range corresponds to Kd from ~200 µM (weak binding) to ~4 pM (very strong binding).
+
+#### Mutant sequence reconstruction
+
+For each of the 5318 mutations: locate `seq_idx` from the ANARCI mapping for the relevant chain, substitute one amino acid at that index, verify exactly 1 position differs from wildtype. Spot-check on 5 random samples (random_state=42): all showed exactly 1 diff.
+
+- lysozyme_2019_D441 H:F64E → 1 diff
+- lysozyme_2019_D441 L:C88V → 1 diff
+- lysozyme_2019_D441 L:I29T → 1 diff
+- EGFR_2013_Cetuximab L:I55K → 1 diff
+- Ang2_2017_G6 H:G54K → 1 diff
+
+#### CDR/FR region distribution
+
+Region labels assigned by looking up each mutation site in the ANARCI mapping. Full distribution:
+
+| Region | Count | % of 5318 |
+|---|---|---|
+| FR | 2188 | 41.1% |
+| CDR_H3 | 851 | 16.0% |
+| CDR_L3 | 646 | 12.1% |
+| CDR_H2 | 558 | 10.5% |
+| CDR_L1 | 433 | 8.1% |
+| CDR_H1 | 415 | 7.8% |
+| CDR_L2 | 227 | 4.3% |
+| **Total CDR** | **3130** | **58.9%** |
+
+FR mutations are dominated by lysozyme_2019_D441 (2094 total mutations, ~66% FR ≈ 1382 FR mutations). HER2_2021_trastuzumab contributes 184 mutations, all in CDR_H3 -- confirmed 0 FR contribution, consistent with prior expectation. All 7 expected region labels present, no unexpected values.
+
+Status: COMPLETE. All assertions passed. CSVs saved to data/ and committed to git on implementation branch.
 
 ### Notebook 2: ESM-2 Sequence-Level Embeddings
 
-Status: EXPECTED COMPLETE (re-verify by running src/embeddings/esm2.py)
+Status: NOT YET RUN IN NEW WORKSPACE. Prior Colab outputs exist at old Drive path (DL_Final_Project/embeddings/) but are not accessible via the new DRIVE_ROOT (DL_Final_Project/Antibody_Project/). Must re-run after NB01 completes.
 
 Produced:
 - esm2_abagym.pt (5318, 2560)
@@ -226,7 +296,7 @@ Produced:
 
 ### Notebook 2.5: ESM-2 Delta Embeddings + EDA
 
-Status: EXPECTED COMPLETE (re-verify by running src/embeddings/delta.py + src/visualization/plots.py)
+Status: NOT YET RUN IN NEW WORKSPACE. Same Drive path caveat as NB02.
 
 Produced:
 - esm2_abagym_delta.pt (5318, 2560)
@@ -235,7 +305,7 @@ Produced:
 
 ### Notebook 3: AbLang2 Sequence-Level Embeddings + Deltas
 
-Status: EXPECTED COMPLETE (re-verify by running src/embeddings/ablang2.py)
+Status: NOT YET RUN IN NEW WORKSPACE. Same Drive path caveat as NB02.
 
 Produced:
 - ablang2_abagym.pt (5318, 960)

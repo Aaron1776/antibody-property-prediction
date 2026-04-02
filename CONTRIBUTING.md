@@ -27,12 +27,12 @@ Both collaborators use a shared Drive folder. The non-owner (Lucas) should add a
 
 Both collaborators set:
 ```
-DRIVE_ROOT = Path('/content/drive/MyDrive/DL_Final_Project')
+DRIVE_ROOT = Path('/content/drive/MyDrive/DL_Final_Project/Antibody_Project')
 ```
 
 Drive folder structure:
 ```
-/MyDrive/DL_Final_Project/
+/MyDrive/DL_Final_Project/Antibody_Project/
     data/
         abagym_antibody.csv
         abagym_sequences.csv
@@ -92,7 +92,7 @@ print("Repo ready.")
 from pathlib import Path
 
 # Change this line only -- use your own Drive path if different
-DRIVE_ROOT = Path('/content/drive/MyDrive/DL_Final_Project')
+DRIVE_ROOT = Path('/content/drive/MyDrive/DL_Final_Project/Antibody_Project')
 
 DATA_DIR = DRIVE_ROOT / 'data'
 EMBEDDING_DIR = DRIVE_ROOT / 'embeddings'
