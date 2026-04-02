@@ -372,51 +372,64 @@ Status: COMPLETE (local MPS run). All API details verified for both models.
 
 ---
 
-### Notebook 2: ESM-2 Sequence-Level Embeddings
+### Notebook 03: Embedding Generation (03_embedding_generation.ipynb)
 
-Status: NOT YET RUN IN NEW WORKSPACE. Prior Colab outputs exist at old Drive path (DL_Final_Project/embeddings/) but are not accessible via the new DRIVE_ROOT (DL_Final_Project/Antibody_Project/). Must re-run after NB01 completes.
+Status: IN PROGRESS -- ESM-2 section complete (local MPS). AbLang2 section pending.
 
-Produced:
-- esm2_abagym.pt (5318, 2560)
-- esm2_abagym_index.json
-- esm2_abagym_wildtype.pt (5, 2560)
-- esm2_abagym_wildtype_index.json
-- esm2_sabdab.pt (491, 2560)
-- esm2_sabdab_index.json
+This notebook consolidates all embedding generation that was previously split across NB02, NB02.5, and NB03 in the prior workspace. All prior outputs at `DL_Final_Project/embeddings/` are superseded by this run at `DL_Final_Project/Antibody_Project/embeddings/`. The notebook is environment-agnostic: runs unchanged on Colab (mounts Drive, clones repo, installs dependencies) or locally (auto-resolves DRIVE_ROOT via Google Drive Desktop glob, skips installs).
 
-### Notebook 2.5: ESM-2 Delta Embeddings + EDA
+#### Design: wt_expanded_sequences
 
-Status: NOT YET RUN IN NEW WORKSPACE. Same Drive path caveat as NB02.
+Residue-level embedding requires a wildtype embedding at every mutation site. The naive approach would be to embed only 5 wildtype sequences and then index into them at extraction time. Instead, we construct `wt_expanded_sequences` -- a list of 5318 wildtype `(heavy, light)` tuples, one per mutation row, where each entry is the wildtype sequence for that mutation's antibody. This allows `embed_sequences_residue` to receive aligned inputs (mutant sequence at row i, wildtype sequence at row i, same site_index at row i) and extract both mutsite and wtsite in a single unified pass with no special indexing logic inside the extraction function.
 
-Produced:
-- esm2_abagym_delta.pt (5318, 2560)
-- esm2_abagym_delta_index.json
-- EDA figures in results/figures/ (esm2_delta_*.png)
+#### ESM-2 embeddings (complete)
 
-### Notebook 3: AbLang2 Sequence-Level Embeddings + Deltas
+All tensors generated on MPS, bs=32. Two progress bars per pooled call (separate H and L passes). Single bar for residue extraction (only the mutated chain is embedded per mutation).
 
-Status: NOT YET RUN IN NEW WORKSPACE. Same Drive path caveat as NB02.
+| File | Shape | Time | Throughput |
+|---|---|---|---|
+| esm2_abagym.pt | (5318, 2560) | 6:02 + 6:32 | 14.65 / 13.54 seq/s |
+| esm2_abagym_wildtype.pt | (5, 2560) | ~1 sec | -- |
+| esm2_sabdab.pt | (491, 2560) | ~38 sec | 12.93 seq/s |
+| esm2_abagym_residue_mutsite.pt | (5318, 1280) | 7:07 | 12.44 seq/s |
+| esm2_abagym_residue_wtsite.pt | (5318, 1280) | 7:48 | 11.35 seq/s |
+| esm2_abagym_delta.pt | (5318, 2560) | instant | tensor subtraction |
+| esm2_abagym_residue_delta.pt | (5318, 1280) | instant | tensor subtraction |
 
-Produced:
-- ablang2_abagym.pt (5318, 960)
-- ablang2_abagym_index.json
-- ablang2_abagym_wildtype.pt (5, 960)
-- ablang2_abagym_wildtype_index.json
-- ablang2_abagym_delta.pt (5318, 960)
-- ablang2_abagym_delta_index.json
-- ablang2_sabdab.pt (491, 960)
-- ablang2_sabdab_index.json
+Wildtype index saved: `esm2_abagym_wildtype_index.json` maps row → antibody name (required by `compute_delta_sequence`). SAbDab index saved: `esm2_sabdab_index.json` maps row → `Antibody_ID`.
+
+Residue extraction is slower than pooled embedding per sequence (7+ min vs 6 min for same N) because each sequence in the residue pass is embedded individually by the mutated chain only, which are variable-length and cannot benefit from length-sorted batching as effectively as the pooled pass.
+
+#### AbLang2 embeddings (complete)
+
+All tensors generated on MPS, bs=32. Single progress bar per call -- AbLang2 processes both chains jointly in one pass, unlike ESM-2's separate H/L passes. AbLang2 is approximately 3x faster than ESM-2 at bs=32, consistent with the 15x parameter count difference (44M vs 651M params).
+
+| File | Shape | Time | Throughput |
+|---|---|---|---|
+| ablang2_abagym.pt | (5318, 960) | 2:02 | 43.44 seq/s |
+| ablang2_abagym_wildtype.pt | (5, 960) | ~1 sec | -- |
+| ablang2_sabdab.pt | (491, 960) | 14 sec | 33.22 seq/s |
+| ablang2_abagym_residue_mutsite.pt | (5318, 480) | 2:04 | 42.75 seq/s |
+| ablang2_abagym_residue_wtsite.pt | (5318, 480) | 2:21 | 37.66 seq/s |
+| ablang2_abagym_delta.pt | (5318, 960) | instant | tensor subtraction |
+| ablang2_abagym_residue_delta.pt | (5318, 480) | instant | tensor subtraction |
+
+Note on residue extraction: AbLang2 always embeds both chains together (`VH|VL`) even for residue-level extraction, because the model has no single-chain forward pass. The token at the mutation position is extracted from the joint representation. This means AbLang2 residue embeddings encode cross-chain context that ESM-2 residue embeddings do not -- ESM-2 embeds only the mutated chain for residue extraction. Whether this cross-chain information is beneficial for mutation effect prediction is an open empirical question.
+
+#### Verification
+
+All 14 tensors passed shape, NaN, and Inf checks. Spot check on row 0 (Ang2_2017_G6 H:P100A):
+- ESM-2 sequence delta norm: 0.0720
+- AbLang2 sequence delta norm: 0.0728
+
+Both models produce similar-magnitude deltas for the same mutation at the sequence level. Whether this similarity holds across the full distribution -- and whether it extends to the residue-level deltas -- is examined in NB04.
+
+Status: COMPLETE. All 14 tensors saved to Drive and verified.
 
 ---
 
 ## Still To Do
-
-- Notebook 3.5 equivalent (AbLang2 delta EDA) -- part of 04_embedding_eda.ipynb
-- Residue-level embedding extraction for both models -- part of 03_embedding_generation.ipynb
-  - esm2_abagym_residue_mutsite.pt (5318, 1280)
-  - esm2_abagym_residue_wtsite.pt (5318, 1280)
-  - ablang2_abagym_residue_mutsite.pt (5318, 480)
-  - ablang2_abagym_residue_wtsite.pt (5318, 480)
+- AbLang2 delta EDA (NB04: does it show the same inverse CDR prior as ESM-2?)
 - All training experiments (2-7) -- 05_training.ipynb
 - Analysis and figures -- 06_analysis.ipynb
 

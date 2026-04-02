@@ -135,11 +135,13 @@ def embed_sequences(
     dict {identifier: tensor of shape (embedding_dim,)} on CPU.
     """
     results = {}
-    for start in range(0, len(id_seq_pairs), batch_size):
-        batch = id_seq_pairs[start: start + batch_size]
-        results.update(
-            embed_batch(batch, model, alphabet, batch_converter, device, repr_layer)
-        )
+    with tqdm(total=len(id_seq_pairs), unit='seq') as pbar:
+        for start in range(0, len(id_seq_pairs), batch_size):
+            batch = id_seq_pairs[start: start + batch_size]
+            results.update(
+                embed_batch(batch, model, alphabet, batch_converter, device, repr_layer)
+            )
+            pbar.update(len(batch))
     return results
 
 
@@ -304,33 +306,36 @@ def embed_sequences_residue(
 
     all_embeddings = []
 
-    for start in range(0, n, batch_size):
-        end = min(start + batch_size, n)
-        batch_seqs    = sequences[start:end]
-        batch_indices = site_indices[start:end]
-        batch_chains  = chains[start:end]
+    with tqdm(total=n, unit='seq') as pbar:
+        for start in range(0, n, batch_size):
+            end = min(start + batch_size, n)
+            batch_seqs    = sequences[start:end]
+            batch_indices = site_indices[start:end]
+            batch_chains  = chains[start:end]
 
-        # Build (identifier, sequence) pairs -- embed the mutated chain only
-        pairs = []
-        for j, ((h_seq, l_seq), chain) in enumerate(
-                zip(batch_seqs, batch_chains)):
-            seq = h_seq if chain == 'H' else l_seq
-            pairs.append((j, seq))
+            # Build (identifier, sequence) pairs -- embed the mutated chain only
+            pairs = []
+            for j, ((h_seq, l_seq), chain) in enumerate(
+                    zip(batch_seqs, batch_chains)):
+                seq = h_seq if chain == 'H' else l_seq
+                pairs.append((j, seq))
 
-        _, _, tokens = batch_converter(pairs)
-        tokens = tokens.to(device)
+            _, _, tokens = batch_converter(pairs)
+            tokens = tokens.to(device)
 
-        with torch.no_grad():
-            output = model(tokens, repr_layers=[repr_layer],
-                           return_contacts=False)
+            with torch.no_grad():
+                output = model(tokens, repr_layers=[repr_layer],
+                               return_contacts=False)
 
-        representations = output['representations'][repr_layer]
-        # (batch, seq_len, dim)
+            representations = output['representations'][repr_layer]
+            # (batch, seq_len, dim)
 
-        for j, seq_idx in enumerate(batch_indices):
-            token_pos = int(seq_idx) + 1  # +1 for BOS token
-            emb = representations[j, token_pos, :].cpu()
-            all_embeddings.append(emb.unsqueeze(0))
+            for j, seq_idx in enumerate(batch_indices):
+                token_pos = int(seq_idx) + 1  # +1 for BOS token
+                emb = representations[j, token_pos, :].cpu()
+                all_embeddings.append(emb.unsqueeze(0))
+
+            pbar.update(len(batch_seqs))
 
     return torch.cat(all_embeddings, dim=0)
 

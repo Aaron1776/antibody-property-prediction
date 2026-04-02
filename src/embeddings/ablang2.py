@@ -207,9 +207,11 @@ def embed_sequences(
     dict {identifier: tensor of shape (960,)} on CPU.
     """
     results = {}
-    for start in range(0, len(id_seq_pairs), batch_size):
-        batch = id_seq_pairs[start: start + batch_size]
-        results.update(embed_batch(batch, ablang_model, device))
+    with tqdm(total=len(id_seq_pairs), unit='seq') as pbar:
+        for start in range(0, len(id_seq_pairs), batch_size):
+            batch = id_seq_pairs[start: start + batch_size]
+            results.update(embed_batch(batch, ablang_model, device))
+            pbar.update(len(batch))
     return results
 
 
@@ -346,30 +348,33 @@ def embed_sequences_residue(
 
     all_embeddings = []
 
-    for start in range(0, n, batch_size):
-        end = min(start + batch_size, n)
-        batch_seqs    = sequences[start:end]
-        batch_indices = site_indices[start:end]
-        batch_chains  = chains[start:end]
+    with tqdm(total=n, unit='seq') as pbar:
+        for start in range(0, n, batch_size):
+            end = min(start + batch_size, n)
+            batch_seqs    = sequences[start:end]
+            batch_indices = site_indices[start:end]
+            batch_chains  = chains[start:end]
 
-        seqs = [f"{h}|{l}" for h, l in batch_seqs]
-        tokens = ablang_model.tokenizer(
-            seqs, pad=True, w_extra_tkns=False, device=str(device)
-        )
+            seqs = [f"{h}|{l}" for h, l in batch_seqs]
+            tokens = ablang_model.tokenizer(
+                seqs, pad=True, w_extra_tkns=False, device=str(device)
+            )
 
-        with torch.no_grad():
-            representations = ablang_model.AbRep(tokens).last_hidden_states
-        # (batch, seq_len, dim)
+            with torch.no_grad():
+                representations = ablang_model.AbRep(tokens).last_hidden_states
+            # (batch, seq_len, dim)
 
-        for j, (seq_idx, chain) in enumerate(zip(batch_indices, batch_chains)):
-            h_seq, _ = batch_seqs[j]
-            if chain == 'H':
-                token_pos = int(seq_idx)
-            else:
-                token_pos = len(h_seq) + 1 + int(seq_idx)  # +1 for SEP
+            for j, (seq_idx, chain) in enumerate(zip(batch_indices, batch_chains)):
+                h_seq, _ = batch_seqs[j]
+                if chain == 'H':
+                    token_pos = int(seq_idx)
+                else:
+                    token_pos = len(h_seq) + 1 + int(seq_idx)  # +1 for SEP
 
-            emb = representations[j, token_pos, :].cpu()
-            all_embeddings.append(emb.unsqueeze(0))
+                emb = representations[j, token_pos, :].cpu()
+                all_embeddings.append(emb.unsqueeze(0))
+
+            pbar.update(len(batch_seqs))
 
     return torch.cat(all_embeddings, dim=0)
 

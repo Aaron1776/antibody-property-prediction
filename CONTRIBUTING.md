@@ -2,7 +2,7 @@
 
 ## Collaboration Loop
 
-Edit `.py` files locally or in your preferred editor, push to GitHub, then pull in Colab before running. All modeling logic lives in `src/`. Notebooks are thin orchestration layers that import from `src/` -- keep it that way.
+Edit `.py` files locally or in your preferred editor, push to GitHub, then pull before running. All modeling logic lives in `src/`. Notebooks are thin orchestration layers that import from `src/` -- keep it that way.
 
 ```bash
 # After editing src/ files locally:
@@ -12,6 +12,9 @@ git push origin implementation
 
 # In Colab, at the start of each session:
 !git -C /content/antibody-property-prediction pull origin implementation
+
+# Locally, before running notebooks:
+git pull origin implementation
 ```
 
 ## Branch Structure
@@ -23,12 +26,26 @@ Never push directly to `main`.
 
 ## Google Drive Setup
 
-Both collaborators use a shared Drive folder. The non-owner (Lucas) should add a shortcut from "Shared with me" to My Drive root so both use the same path.
+Both collaborators use a shared Drive folder. `DRIVE_ROOT` is resolved automatically by `src/config.py` -- no manual path setup needed in the notebooks. Resolution order:
+1. Colab: `/content/drive/MyDrive/DL_Final_Project/Antibody_Project`
+2. Local Mac with Google Drive Desktop: auto-detected via glob (any Google account)
+3. Fallback: `outputs/` at repo root (gitignored)
 
-Both collaborators set:
-```
-DRIVE_ROOT = Path('/content/drive/MyDrive/DL_Final_Project/Antibody_Project')
-```
+### Collaborator Setup
+
+Complete these steps once before running notebooks locally. Colab-only collaborators only need steps 1-2.
+
+1. **Get repo access**: ask the owner to add you as a collaborator on GitHub
+2. **Get Drive access**: ask the owner to share the `DL_Final_Project/Antibody_Project` folder with your Google account (Editor access)
+3. **Add Drive shortcut**: in Google Drive, open "Shared with me", right-click the folder, select Organize → Add shortcut, and place it at **My Drive root** (not inside any subfolder). This is required so the path matches what Colab expects.
+4. **Install Google Drive Desktop**: download and install from drive.google.com/drive/download. Sign in with the same Google account. Wait for the initial sync to complete.
+5. **Clone the repo locally**:
+   ```bash
+   git clone -b implementation https://github.com/Aaron1776/antibody-property-prediction.git
+   cd antibody-property-prediction
+   pip install -r requirements.txt
+   ```
+6. **Verify**: open a notebook and run the setup cells. Cell 2 should print a Drive root path ending in `DL_Final_Project/Antibody_Project` -- not `outputs/`. If it prints `outputs/`, the shortcut is not in the right place or Drive Desktop has not finished syncing.
 
 Drive folder structure:
 ```
@@ -38,113 +55,123 @@ Drive folder structure:
         abagym_sequences.csv
         sabdab_affinity.csv
     embeddings/
-        # sequence-level (5318, 2560) and (5318, 960):
-        esm2_abagym.pt, esm2_abagym_index.json
-        esm2_abagym_wildtype.pt, esm2_abagym_wildtype_index.json
-        esm2_abagym_delta.pt, esm2_abagym_delta_index.json
-        esm2_sabdab.pt, esm2_sabdab_index.json
-        ablang2_abagym.pt, ablang2_abagym_index.json
-        ablang2_abagym_wildtype.pt, ablang2_abagym_wildtype_index.json
-        ablang2_abagym_delta.pt, ablang2_abagym_delta_index.json
-        ablang2_sabdab.pt, ablang2_sabdab_index.json
-        # residue-level (to be generated):
-        esm2_abagym_residue_mutsite.pt   (5318, 1280)
-        esm2_abagym_residue_wtsite.pt    (5318, 1280)
+        # ESM-2 sequence-level
+        esm2_abagym.pt                    (5318, 2560)
+        esm2_abagym_wildtype.pt           (5, 2560)
+        esm2_abagym_wildtype_index.json
+        esm2_abagym_delta.pt              (5318, 2560)
+        esm2_sabdab.pt                    (491, 2560)
+        esm2_sabdab_index.json
+        # ESM-2 residue-level
+        esm2_abagym_residue_mutsite.pt    (5318, 1280)
+        esm2_abagym_residue_wtsite.pt     (5318, 1280)
+        esm2_abagym_residue_delta.pt      (5318, 1280)
+        # AbLang2 sequence-level
+        ablang2_abagym.pt                 (5318, 960)
+        ablang2_abagym_wildtype.pt        (5, 960)
+        ablang2_abagym_wildtype_index.json
+        ablang2_abagym_delta.pt           (5318, 960)
+        ablang2_sabdab.pt                 (491, 960)
+        ablang2_sabdab_index.json
+        # AbLang2 residue-level
         ablang2_abagym_residue_mutsite.pt (5318, 480)
         ablang2_abagym_residue_wtsite.pt  (5318, 480)
+        ablang2_abagym_residue_delta.pt   (5318, 480)
     results/
         figures/
     checkpoints/
     wandb/
 ```
 
-## Colab Session Setup
+## Session Setup
 
-Every session starts with the same setup cells. The only line that differs per collaborator is `DRIVE_ROOT`.
+Notebooks run unchanged on Colab or locally. The setup cells detect the environment automatically -- no per-collaborator edits needed.
 
-### Cell 1: Mount Drive and clone/pull repo
-
-```python
-from google.colab import drive
-drive.mount('/content/drive')
-
-import subprocess, os
-
-REPO_URL = 'https://github.com/Aaron1776/antibody-property-prediction.git'
-REPO_DIR = '/content/antibody-property-prediction'
-BRANCH = 'implementation'
-
-if not os.path.exists(REPO_DIR):
-    subprocess.run(['git', 'clone', '-b', BRANCH, REPO_URL, REPO_DIR], check=True)
-else:
-    subprocess.run(['git', '-C', REPO_DIR, 'pull', 'origin', BRANCH], check=True)
-
-import sys
-if REPO_DIR not in sys.path:
-    sys.path.insert(0, REPO_DIR)
-
-print("Repo ready.")
-```
-
-### Cell 2: Set paths
+### Cell 1: Environment detection, sys.path, repo
 
 ```python
+import subprocess, os, sys
 from pathlib import Path
 
-# Change this line only -- use your own Drive path if different
-DRIVE_ROOT = Path('/content/drive/MyDrive/DL_Final_Project/Antibody_Project')
+IN_COLAB = 'google.colab' in sys.modules or os.path.exists('/content')
 
-DATA_DIR = DRIVE_ROOT / 'data'
-EMBEDDING_DIR = DRIVE_ROOT / 'embeddings'
-RESULTS_DIR = DRIVE_ROOT / 'results'
-FIGURES_DIR = RESULTS_DIR / 'figures'
-CHECKPOINT_DIR = DRIVE_ROOT / 'checkpoints'
+if IN_COLAB:
+    from google.colab import drive
+    drive.mount('/content/drive')
 
-for d in [DATA_DIR, EMBEDDING_DIR, RESULTS_DIR, FIGURES_DIR, CHECKPOINT_DIR]:
+    REPO_URL = 'https://github.com/Aaron1776/antibody-property-prediction.git'
+    REPO_DIR = '/content/antibody-property-prediction'
+    BRANCH   = 'implementation'
+
+    if not os.path.exists(REPO_DIR):
+        subprocess.run(['git', 'clone', '-b', BRANCH, REPO_URL, REPO_DIR], check=True)
+    else:
+        subprocess.run(['git', '-C', REPO_DIR, 'pull', 'origin', BRANCH], check=True)
+
+    if REPO_DIR not in sys.path:
+        sys.path.insert(0, REPO_DIR)
+else:
+    REPO_DIR = str(Path('..').resolve())
+    if REPO_DIR not in sys.path:
+        sys.path.insert(0, REPO_DIR)
+
+print(f"Environment: {'Colab' if IN_COLAB else 'local'}")
+print(f"Repo: {REPO_DIR}")
+```
+
+### Cell 2: Paths (auto-resolved by src/config.py)
+
+```python
+from src.config import DRIVE_ROOT, EMBEDDING_DIR, RESULTS_DIR, FIGURES_DIR, CHECKPOINT_DIR
+
+for d in [EMBEDDING_DIR, RESULTS_DIR, FIGURES_DIR, CHECKPOINT_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
+print(f"Drive root: {DRIVE_ROOT}")
 print("Paths set.")
 ```
 
 ### Cell 3: Install dependencies
 
 ```python
-# HMMER must come before ANARCI or ANARCI will silently fail at runtime
-!apt-get install -y hmmer
-
-!pip install -q fair-esm ablang2 anarci wandb
+if IN_COLAB:
+    import subprocess
+    subprocess.run(['apt-get', 'install', '-y', 'hmmer'], check=True)
+    subprocess.run(['pip', 'install', '-q', '--upgrade', 'ipython'], check=True)
+    subprocess.run(['pip', 'install', '-q', 'fair-esm', 'ablang2', 'anarci', 'wandb'], check=True)
+else:
+    print("Local run -- installation skipped.")
 ```
 
-### Cell 4: IPython upgrade (required for autoreload on Python 3.12)
-
-```python
-!pip install -q --upgrade ipython
-```
-
-### Cell 5: Enable autoreload and clear pycache
+### Cell 4: Autoreload and pycache
 
 ```python
 %load_ext autoreload
 %autoreload 2
 
-import subprocess
-subprocess.run(['find', '/content/antibody-property-prediction', '-type', 'd',
-                '-name', '__pycache__', '-exec', 'rm', '-rf', '{}', '+'],
-               capture_output=True)
-print("Autoreload enabled, pycache cleared.")
+if IN_COLAB:
+    import subprocess
+    subprocess.run(
+        ['find', REPO_DIR, '-type', 'd', '-name', '__pycache__', '-exec', 'rm', '-rf', '{}', '+'],
+        capture_output=True,
+    )
+
+print("Autoreload enabled.")
 ```
 
-### Cell 6: GPU check
+### Cell 5: Device check
 
 ```python
 import torch
-print(f"CUDA available: {torch.cuda.is_available()}")
-if torch.cuda.is_available():
+from src.config import DEVICE
+
+print(f"Device: {DEVICE}")
+if DEVICE == 'cuda':
     print(f"GPU: {torch.cuda.get_device_name(0)}")
     print(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 ```
 
-### Cell 7: W&B login
+### Cell 6: W&B login
 
 ```python
 import wandb
