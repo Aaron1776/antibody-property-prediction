@@ -12,11 +12,12 @@ Residue-level delta:
     Both inputs are (N, dim) tensors already aligned by mutation index.
 """
 
-import json
 from pathlib import Path
 from typing import Dict, List
 
 import torch
+
+from src.utils import load_index
 
 
 def compute_delta_sequence(
@@ -57,7 +58,9 @@ def compute_delta_sequence(
     missing = [n for n in set(dms_names) if n not in dms_to_wt_row]
     assert not missing, f"DMS names not found in wildtype index: {missing}"
 
-    wt_rows = [dms_to_wt_row[name] for name in dms_names]
+    wt_rows = torch.tensor(
+        [dms_to_wt_row[name] for name in dms_names], dtype=torch.long
+    )
     delta = mutant_tensor - wildtype_tensor[wt_rows]
 
     return delta
@@ -125,12 +128,12 @@ def load_cached_deltas(
     if level == 'sequence':
         filename = f'{model_name}_abagym_delta.pt'
     else:
-        # residue-level delta is computed from mutsite and wtsite tensors,
-        # not stored as a single pre-cached file
+        # Residue-level deltas are computed on-the-fly via compute_delta_residue().
+        # The mutsite and wtsite tensors are stored separately.
         raise ValueError(
-            "Residue-level deltas are computed from mutsite/wtsite tensors "
-            "via compute_delta_residue(). Load mutsite and wtsite separately "
-            "using their filenames: "
+            "Residue-level deltas are not cached as a single file. "
+            "Load the mutsite and wtsite tensors separately and call "
+            "compute_delta_residue(). Filenames: "
             f"{model_name}_abagym_residue_mutsite.pt and "
             f"{model_name}_abagym_residue_wtsite.pt"
         )
