@@ -429,14 +429,50 @@ Status: COMPLETE. All 14 tensors saved to Drive and verified.
 ---
 
 ## Still To Do
-- AbLang2 delta EDA (NB04: does it show the same inverse CDR prior as ESM-2?)
+- Run NB04 (embedding EDA) and record findings in PROGRESS.md
 - All training experiments (2-7) -- 05_training.ipynb
 - Analysis and figures -- 06_analysis.ipynb
+
+---
+
+## Notebook 04: Embedding EDA (04_embedding_eda.ipynb)
+
+Status: STRUCTURE COMPLETE -- not yet run.
+
+Self-contained EDA covering both models (ESM-2 and AbLang2) at both embedding levels
+(sequence and residue). No model inference -- loads all 6 tensors from Drive cache.
+
+### Analyses in NB04
+
+1. Discriminability gain (CoV raw vs delta) -- both models, sequence level
+2. Delta norm distributions by dataset -- both models, sequence level
+3. CDR vs FR delta norms with Mann-Whitney test -- both models, both levels
+4. Spearman(delta norm, DMS score) per dataset -- both models, both levels
+5. PCA structure (colored by chain, CDR/FR, dataset) -- both models, both levels
+6. Cross-model comparison: Spearman between ESM-2 and AbLang2 delta norm vectors
+7. Full Spearman summary table: 2 models x 2 levels x 5 datasets + aggregate
+
+### src/ changes made for NB04
+
+`src/visualization/plots.py` -- 4 NB04 stubs implemented plus 1 new function:
+- `plot_delta_norm_by_dataset`: violin per dataset, 5 panels
+- `plot_delta_norm_cdr_vs_fr`: binary CDR/FR violin + 7-region detail panel; Mann-Whitney annotated
+- `plot_delta_pca`: 2D PCA scatter; handles continuous (dms_score) and categorical (chain, region, dataset, cdr_fr) coloring
+- `plot_delta_variance_ratio`: raw CoV vs delta CoV bar chart (log scale) + ratio panel
+- `plot_model_comparison_norms` (new): scatter of ESM-2 vs AbLang2 delta norms, colored CDR/FR, Spearman annotated
+
+### Results
+
+NOT YET RUN. Record findings here after executing.
 
 ---
 
 ## Open Questions
 
 - Experiment 6 (delta residue + max/mean pool): exact formulation TBD
-- AbLang2 delta EDA: does it show the same inverse CDR prior as ESM-2? Does cross-chain attention mix the H/L subspaces?
+- NB04 open questions (to be answered by running the notebook):
+  - Does AbLang2 show the same inverse CDR prior as ESM-2 (FR delta norms > CDR delta norms)?
+  - Does cross-chain attention mix the H/L subspaces in AbLang2 PCA, or is the orthogonal cross structure still visible?
+  - Is residue-level Spearman stronger or weaker than sequence-level for both models?
+  - Do ESM-2 and AbLang2 agree on which mutations are large vs small (high cross-model Spearman)?
 - Whether the CDR constraint helps or hurts ESM-2 (inverse prior finding makes this genuinely uncertain)
