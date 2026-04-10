@@ -3,18 +3,21 @@
 Each dataset loads embedding tensors from Drive at init time and serves
 them from memory. No model forward passes happen here.
 
-Embedding strategies correspond to experiments 2-6 in the experiment matrix:
+Embedding strategies correspond to experiments 2-5 in the experiment matrix:
   DELTA_SEQUENCE          -- Exp 4: mean_pool(mutant) - mean_pool(wt)
   DELTA_RESIDUE           -- Exp 2: mutant_residue[mut_pos] - wt_residue[mut_pos]
   DELTA_RESIDUE_PLUS_WILD -- Exp 3: concat(delta_residue, mean_pool(wt_sequence))
   DELTA_RESIDUE_REDUCED   -- Exp 5: reduce(delta_residue) via PCA or learned projection
-  DELTA_RESIDUE_POOLED    -- Exp 6: TBD (formulation not yet decided)
+
+Experiment 6 (CDR constraint loss) is not a separate strategy -- it applies the
+constraint penalty on top of whichever strategy performs best. See src/training/losses.py.
 """
 
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 import pandas as pd
@@ -26,7 +29,6 @@ class EmbeddingStrategy(Enum):
     DELTA_RESIDUE = 'delta_residue'
     DELTA_RESIDUE_PLUS_WILD = 'delta_residue_plus_wild'
     DELTA_RESIDUE_REDUCED = 'delta_residue_reduced'
-    DELTA_RESIDUE_POOLED = 'delta_residue_pooled'  # TBD
 
 
 class AbAgymDataset(Dataset):
@@ -50,6 +52,15 @@ class AbAgymDataset(Dataset):
     label_col:
         Column in antibody_df to use as the regression label.
         Default: 'MinMax_normalized_DMS_score'.
+    transform:
+        Optional callable applied to the raw delta residue vector before
+        returning from __getitem__. Used for Exp 5 (DELTA_RESIDUE_REDUCED).
+        Must accept and return a 1-D numpy array. Ignored for all other
+        strategies. Must be fitted on training data only before being passed
+        here -- fit on train split, then pass the same fitted transform to
+        train, val, and test dataset instances.
+        Example: sklearn PCA fitted on train set, wrapped as
+          transform=lambda x: pca.transform(x[None])[0]
 
     Returns from __getitem__
     ------------------------
@@ -61,9 +72,8 @@ class AbAgymDataset(Dataset):
     Input tensor shapes by strategy and model:
     - DELTA_SEQUENCE:           ESM-2 = 2560, AbLang2 = 960
     - DELTA_RESIDUE:            ESM-2 = 1280, AbLang2 = 480
-    - DELTA_RESIDUE_PLUS_WILD:  ESM-2 = 1280 + 2560 = 3840, AbLang2 = 480 + 960 = 1440
-    - DELTA_RESIDUE_REDUCED:    depends on reduction dimension
-    - DELTA_RESIDUE_POOLED:     TBD
+    - DELTA_RESIDUE_PLUS_WILD:  ESM-2 = 3840, AbLang2 = 1440
+    - DELTA_RESIDUE_REDUCED:    depends on transform output dimension
     """
 
     def __init__(
@@ -73,20 +83,17 @@ class AbAgymDataset(Dataset):
         strategy: EmbeddingStrategy,
         model_name: str,
         label_col: str = 'MinMax_normalized_DMS_score',
+        transform: Optional[Callable[[np.ndarray], np.ndarray]] = None,
     ):
         assert model_name in ('esm2', 'ablang2'), (
             f"model_name must be 'esm2' or 'ablang2', got {model_name!r}"
         )
-        if strategy == EmbeddingStrategy.DELTA_RESIDUE_POOLED:
-            raise NotImplementedError(
-                "DELTA_RESIDUE_POOLED formulation is not yet decided. "
-                "See Experiment 6 in PROGRESS.md."
-            )
 
         self.df = antibody_df.reset_index(drop=True)
         self.strategy = strategy
         self.model_name = model_name
         self.label_col = label_col
+        self.transform = transform
         embedding_dir = Path(embedding_dir)
 
         # Load required tensors based on strategy
@@ -157,8 +164,10 @@ class AbAgymDataset(Dataset):
             input_tensor = torch.cat([delta_res, wt_seq_emb])
 
         elif self.strategy == EmbeddingStrategy.DELTA_RESIDUE_REDUCED:
-            # Raw delta residue; reduction handled by model or upstream
-            input_tensor = self.delta_residue[idx] - self.wt_residue[idx]
+            delta = (self.delta_residue[idx] - self.wt_residue[idx]).numpy()
+            if self.transform is not None:
+                delta = self.transform(delta)
+            input_tensor = torch.from_numpy(delta).float()
 
         return input_tensor, label, metadata
 
