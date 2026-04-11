@@ -98,11 +98,10 @@ class AbAgymDataset(Dataset):
 
         # Load required tensors based on strategy
         if strategy == EmbeddingStrategy.DELTA_SEQUENCE:
+            # Delta tensor is pre-computed in row order matching antibody_df.
+            # No index file needed -- self.delta[idx] maps directly to df row idx.
             self.delta = self._load_tensor(
                 embedding_dir, f'{model_name}_abagym_delta.pt'
-            )
-            self.delta_index = self._load_index(
-                embedding_dir, f'{model_name}_abagym_delta_index.json'
             )
 
         elif strategy == EmbeddingStrategy.DELTA_RESIDUE:
