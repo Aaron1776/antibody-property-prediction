@@ -122,9 +122,12 @@ class AbAgymDataset(Dataset):
             self.wt_sequence = self._load_tensor(
                 embedding_dir, f'{model_name}_abagym_wildtype.pt'
             )
-            self.wt_sequence_index = self._load_index(
+            # Index on disk is {row_int: dms_name}; invert to {dms_name: row_int}
+            # so __getitem__ can look up by DMS_name.
+            raw_index = self._load_index(
                 embedding_dir, f'{model_name}_abagym_wildtype_index.json'
             )
+            self.wt_sequence_index = {v: int(k) for k, v in raw_index.items()}
 
         elif strategy == EmbeddingStrategy.DELTA_RESIDUE_REDUCED:
             # TODO: load residue tensors; reduction applied externally or via
