@@ -27,11 +27,7 @@ All experiments run for both ESM-2 and AbLang2.
 | 3 | Delta Residue + Full Wild | concat(delta_residue, mean_pool(wt_sequence)) | Oscar | Residue delta + sequence context |
 | 4 | Delta Sequence only | mean_pool(mutant_seq) - mean_pool(wt_seq) | Oscar | Already cached from prior work |
 | 5 | Delta Residue + dim reduction | reduce(delta_residue) via PCA or learned | Lucas | |
-| 6 | Delta Residue + max/mean pool | TBD -- needs clarification | TBD | Possibly concat(delta_residue, max_pool(seq), mean_pool(seq)) |
-| 7 | CDR Constraint | Best-performing embedding strategy + constraint loss | Both | Lambda sweep [0, 0.1, 0.5, 1.0] |
-
-Experiment 4 uses existing cached sequence-level delta embeddings.
-Experiments 2, 3, 5, 6 require residue-level embeddings (to be generated in NB03).
+| 6 | CDR Constraint | Best-performing embedding strategy + constraint loss | Both | Lambda sweep [0, 0.1, 0.5, 1.0] |
 
 ---
 
@@ -204,8 +200,6 @@ Columns: Antibody_ID, heavy_seq, light_seq, Antigen_ID, Antigen, Y, pKd
 
 ### Notebook 1: Data Pipeline
 
-Status: IN PROGRESS -- running locally. ANARCI mappings verified. SAbDab download, mutant reconstruction, and CSV save pending.
-
 #### AbAgym data source
 
 The AbAgym GitHub repo does not contain per-antibody CSV files. The actual structure is:
@@ -282,9 +276,10 @@ FR mutations are dominated by lysozyme_2019_D441 (2094 total mutations, ~66% FR 
 
 Status: COMPLETE. All assertions passed. CSVs saved to data/ and committed to git on implementation branch.
 
+---
+
 ### Notebook 02: Model Exploration (02_model_exploration.ipynb)
 
-Status: IN PROGRESS -- ESM-2 section complete locally (MPS). AbLang2 section in progress.
 
 Purpose: verify all ESM-2 and AbLang2 API details before writing embedding generation code. Nothing is saved to disk from this notebook -- findings are documented here.
 
@@ -374,7 +369,6 @@ Status: COMPLETE (local MPS run). All API details verified for both models.
 
 ### Notebook 03: Embedding Generation (03_embedding_generation.ipynb)
 
-Status: IN PROGRESS -- ESM-2 section complete (local MPS). AbLang2 section pending.
 
 This notebook consolidates all embedding generation that was previously split across NB02, NB02.5, and NB03 in the prior workspace. All prior outputs at `DL_Final_Project/embeddings/` are superseded by this run at `DL_Final_Project/Antibody_Project/embeddings/`. The notebook is environment-agnostic: runs unchanged on Colab (mounts Drive, clones repo, installs dependencies) or locally (auto-resolves DRIVE_ROOT via Google Drive Desktop glob, skips installs).
 
@@ -428,16 +422,7 @@ Status: COMPLETE. All 14 tensors saved to Drive and verified.
 
 ---
 
-## Still To Do
-- Run NB04 (embedding EDA) and record findings in PROGRESS.md
-- All training experiments (2-7) -- 05_training.ipynb
-- Analysis and figures -- 06_analysis.ipynb
-
----
-
 ## Notebook 04: Embedding EDA (04_embedding_eda.ipynb)
-
-Status: STRUCTURE COMPLETE -- not yet run.
 
 Self-contained EDA covering both models (ESM-2 and AbLang2) at both embedding levels
 (sequence and residue). No model inference -- loads all 6 tensors from Drive cache.
@@ -463,16 +448,600 @@ Self-contained EDA covering both models (ESM-2 and AbLang2) at both embedding le
 
 ### Results
 
-NOT YET RUN. Record findings here after executing.
+---
+
+#### Finding 1: Sequence delta norm global statistics
+
+The L2 norm of each row of the delta tensor (||mutant_embedding - wildtype_embedding||_2)
+measures how much the model's representation shifted in response to a single amino acid
+substitution. This is the core scalar quantity used throughout the EDA.
+
+| Metric | ESM-2 | AbLang2 |
+|---|---|---|
+| min | 0.0254 | 0.0437 |
+| median | 0.0872 | 0.1084 |
+| max | 0.3167 | 0.6065 |
+
+AbLang2 has a higher median (+24%) and a wider range. Notably, AbLang2's minimum is
+0.0437 vs ESM-2's 0.0254 -- AbLang2 has no near-zero deltas, suggesting it responds
+with nonzero magnitude to every mutation in the dataset, even conservative ones.
+AbLang2's maximum (0.6065) is approximately 2x ESM-2's (0.3167), indicating that some
+mutations produce substantially larger perturbations in the antibody-specific space.
+
+---
+
+#### Finding 2: Discriminability gain from delta computation (CoV ratio)
+
+Raw sequence embeddings cluster tightly around wildtype (high cosine similarity, low
+CoV of L2 norms). Computing delta = mutant - wildtype amplifies the mutation-specific
+signal. The discriminability gain is measured as CoV(delta norms) / CoV(raw norms),
+where CoV = std / mean. A higher ratio means the delta computation extracted more
+variance relative to what was present in the raw embeddings.
+
+| Dataset | ESM-2 ratio | AbLang2 ratio |
+|---|---|---|
+| Ang2_2017_G6 | 239x | 96x |
+| EGFR_2013_Cetuximab | 223x | 105x |
+| HER2_2021_trastuzumab | 302x | 91x |
+| VEGF_2017b_G6 | 225x | 178x |
+| lysozyme_2019_D441 | 178x | 117x |
+| Range | 178x–302x | 91x–178x |
+
+ESM-2's gains (178x–302x) are roughly 1.7–3x larger than AbLang2's (91x–178x). This
+does not mean ESM-2's deltas are more informative -- it means AbLang2's raw embeddings
+are already less compressed around wildtype. AbLang2 was trained on OAS antibody
+sequences and has encountered far more antibody-specific sequence diversity, so the
+baseline spread of its raw embeddings is higher. The delta computation still provides
+large absolute gains for both models.
+
+Key finding -- HER2 inversion between models: ESM-2 has its highest ratio on HER2
+(302x) while AbLang2 has its lowest (91x). All 184 HER2 mutations are in CDR H3.
+The high ESM-2 ratio is driven by an extremely low raw CoV denominator: ESM-2's raw
+mean-pooled embeddings for the 184 HER2 CDR H3 mutants have nearly identical L2 norms.
+CDR H3 is severely under-represented in UniRef50 -- antibodies are a small fraction of
+the proteome, and 50% identity clustering further collapses CDR H3 sequence diversity.
+ESM-2 therefore assigns relatively uniform contextual embeddings at CDR H3 positions
+regardless of amino acid identity; the flanking conserved IMGT framework context
+dominates the mean-pooled representation, not the single variable position. ESM-2 is
+insensitive to CDR H3 amino acid variation in raw embedding space -- this is reflected
+also in the delta space, where CDR H3 produces the smallest delta norms of any loop
+(~0.075, tied for lowest with CDR_L2 in Finding 4). The raw embeddings do not vary
+because ESM-2 does not distinguish amino acids at CDR H3 positions well, compressing
+the raw CoV and inflating the ratio.
+
+From AbLang2's perspective, trained on OAS where CDR H3 is the most hypervariable
+region in the antibody repertoire, CDR H3 amino acid identity is highly informative.
+Its raw embeddings at CDR H3 positions vary meaningfully with amino acid identity,
+giving a higher raw CoV and therefore a lower ratio (91x). This HER2 inversion is a
+fingerprint of domain specificity: ESM-2 is insensitive to CDR H3 variation because
+it has barely encountered it; AbLang2 is sensitive to it because it has trained on it
+extensively.
+
+---
+
+#### Finding 3: Delta norm distributions by dataset (violin plots)
+
+**ESM-2:** Dataset-level norm distributions show meaningful variation in median and
+spread. HER2 has the lowest median (~0.065) and tightest distribution. Lysozyme has
+the highest median (~0.10) and widest spread. The ordering of medians -- lysozyme >
+others > HER2 -- is consistent with the inverse CDR prior: lysozyme is 66% FR
+mutations (higher norms) while HER2 is 100% CDR H3 (lower norms for ESM-2). All
+five distributions are right-skewed.
+
+**AbLang2:** In contrast to ESM-2, all five datasets have nearly identical medians
+(~0.09–0.10), suggesting AbLang2 responds with similar average magnitude regardless
+of dataset CDR/FR composition. Most datasets show strong right skew with long upper
+tails (outlier mutations reaching 0.33–0.60). HER2 is the exception: its distribution
+is bell-shaped and approximately symmetric with a tight spread (~0.07–0.15) and no
+upper tail. This is the opposite of what AbLang2 shows on other datasets and the
+opposite of what ESM-2 shows on HER2. The symmetric HER2 shape in AbLang2 reflects
+the model responding uniformly to CDR H3 mutations -- they are all within the expected
+range of variation, producing neither very large nor very small deltas.
+
+---
+
+#### Finding 4: CDR vs FR delta norms -- the inverse CDR prior (sequence level)
+
+The CDR prior states that CDR mutations should have larger functional effects than
+framework mutations, since CDRs form the binding interface while FR is structural
+scaffold. A model that encodes this prior would show CDR delta norms > FR delta norms.
+
+**Both models show the inverse: FR > CDR.** Antibody-specific pretraining attenuates
+but does not eliminate this inversion.
+
+| | ESM-2 | AbLang2 |
+|---|---|---|
+| CDR median | 0.0802 | 0.1030 |
+| FR median | 0.1022 | 0.1180 |
+| FR/CDR ratio | 1.275x | 1.145x |
+| Direction | FR > CDR | FR > CDR |
+| Mann-Whitney p | ~0 (float underflow) | ~0 (float underflow) |
+
+The p-values display as 0.00e+00 due to scipy float underflow at extreme significance
+(N=5318, effect clear throughout). Both results are unambiguously significant.
+
+**Mechanistic interpretation:**
+ESM-2 (1.275x effect): Trained on ~250M diverse protein sequences, ESM-2 has seen
+FR regions as highly conserved structural elements. Any mutation to a conserved position
+is statistically unusual and produces a large representational shift. CDR mutations,
+particularly in CDR H3, are less unusual to a general protein model because loop
+diversity exists throughout the proteome. The result is FR mutations produce larger
+delta norms than CDR mutations -- an inversion of the biological CDR prior.
+
+AbLang2 (1.145x effect): Trained on OAS antibody sequences, AbLang2 has seen extensive
+CDR diversity and knows that CDRs are expected to vary. This partially corrects the
+inversion -- the FR/CDR ratio drops from 1.275x to 1.145x. However, FR positions are
+still more conserved even within the antibody repertoire, so the inversion persists.
+The residual inverse prior in AbLang2 may reflect genuinely unusual FR mutations
+(structural disruptions) rather than a systematic training artifact.
+
+The driver of the FR > CDR result differs between models: in ESM-2 the bulk CDR and
+FR distributions are clearly separated. In AbLang2 the bulk distributions overlap more,
+and it is primarily FR's extreme upper tail (extending to ~0.5) that pulls FR median
+above CDR, while CDR distributions top out around 0.28–0.35.
+
+**7-loop breakdown -- ESM-2 (approximate medians):**
+
+| Region | Approx. median |
+|---|---|
+| CDR_H1 | ~0.104 |
+| FR | ~0.102 |
+| CDR_L1 | ~0.090 |
+| CDR_H2 | ~0.082 |
+| CDR_L3 | ~0.078 |
+| CDR_L2 | ~0.075 |
+| CDR_H3 | ~0.075 |
+
+CDR_H1 is an outlier: its median (~0.104) is essentially equal to FR (~0.102). CDR_H1
+adopts a small number of canonical conformations (canonical loop structures), making it
+more structurally constrained than CDR_H3. ESM-2 treats CDR_H1 mutations as nearly as
+unusual as FR mutations. CDR_H3 and CDR_L2 are the lowest (~0.075), furthest below FR.
+CDR_H3 is the most hypervariable loop; ESM-2 has seen loop diversity at H3-equivalent
+positions throughout the proteome. The inverse CDR prior is not uniform across loops:
+it is strongest for CDR_H3/CDR_L2 and absent for CDR_H1.
+
+**7-loop breakdown -- AbLang2 (approximate medians):**
+
+| Region | Approx. median |
+|---|---|
+| FR | ~0.118 |
+| CDR_L3 | ~0.108 |
+| CDR_L1 | ~0.107 |
+| CDR_L2 | ~0.105 |
+| CDR_H1 | ~0.104 |
+| CDR_H3 | ~0.100 |
+| CDR_H2 | ~0.098 |
+
+Three key differences from ESM-2's loop breakdown:
+
+1. CDR_H3 is no longer the lowest loop. In ESM-2, CDR_H3 was at 0.075 (tied for
+   lowest). In AbLang2 it is mid-range (~0.100). OAS training has seen extensive CDR_H3
+   variation in antibodies, so those mutations are expected and produce moderate norms.
+
+2. CDR loops are far more homogeneous. AbLang2's CDR medians span 0.098–0.108 (range
+   0.010) vs ESM-2's 0.075–0.104 (range 0.029). The antibody-specific model treats all
+   CDR loops similarly -- diversity is expected throughout the paratope.
+
+3. Light chain CDRs (L1, L2, L3, medians 0.105–0.108) have slightly higher medians
+   than heavy chain CDRs (H1, H2, H3, medians 0.098–0.104). This asymmetry may reflect
+   AbLang2's joint VH|VL encoding via cross-chain attention, which has no analog in
+   ESM-2's separate per-chain forward passes.
+
+**Implication for Experiment 7 (CDR constraint loss):**
+The constraint penalizes predictions where |FR effect| > |CDR effect|, directly opposing
+the inverse prior encoded in both models. The constraint fires more forcefully against
+ESM-2 (stronger inversion, 1.275x) than AbLang2 (weaker inversion, 1.145x). Whether
+this helps or hurts each model's predictive performance is an open empirical question,
+but the geometry suggests the constraint is a harder correction to impose on ESM-2.
+
+---
+
+#### Finding 5: Spearman(delta norm, DMS score) -- sequence level
+
+The L2 norm of the sequence-level delta is a scalar unsupervised predictor of mutation
+effect. Spearman correlation is computed per dataset and in aggregate. This measures the
+signal available from embedding geometry alone, before any trained model is applied.
+
+| Dataset | ESM-2 r | ESM-2 p | AbLang2 r | AbLang2 p |
+|---|---|---|---|---|
+| Ang2_2017_G6 | 0.1086 | 6.57e-04 | 0.3174 | 2.16e-24 |
+| EGFR_2013_Cetuximab | 0.0788 | 9.88e-03 | 0.1484 | 1.08e-06 |
+| HER2_2021_trastuzumab | 0.1270 | 8.59e-02 | 0.1234 | 9.50e-02 |
+| VEGF_2017b_G6 | 0.1510 | 1.86e-06 | 0.3753 | 2.15e-34 |
+| lysozyme_2019_D441 | 0.1371 | 2.95e-10 | 0.2116 | 1.25e-22 |
+| ALL (N=5318) | 0.0834 | 1.13e-09 | 0.2157 | 4.99e-57 |
+
+AbLang2 substantially outperforms ESM-2 on every dataset except HER2. The aggregate
+Spearman (ALL) is 0.2157 for AbLang2 vs 0.0834 for ESM-2 -- AbLang2 is 2.6x higher.
+Per-dataset gains: Ang2 (3x), VEGF (2.5x), EGFR (1.9x), lysozyme (1.5x).
+
+HER2 is the sole exception: both models yield nearly identical, marginally non-significant
+correlations (ESM-2 r=0.1270, p=0.086; AbLang2 r=0.1234, p=0.095). Neither achieves
+p<0.05. This is expected given HER2's bimodal DMS score distribution and its composition
+of 100% CDR H3 mutations. HER2 should be reported separately in the paper and excluded
+from aggregate comparisons where possible, or explicitly noted as an outlier.
+
+Ang2 and VEGF are the strongest datasets for AbLang2 (r=0.32 and r=0.38). Both are
+G6-scaffold antibodies with 79% CDR mutations. The high correlation may reflect AbLang2
+encoding G6-specific CDR variation better, having seen similar scaffolds in OAS.
+
+ESM-2 values are consistent with prior NB02.5 findings (r=0.079–0.151 reported there).
+
+Important caveat: these Spearman values are on the norm only (1 scalar per mutation).
+The trained MLP operates on the full 2560-dim or 960-dim delta vector and is expected to
+achieve substantially higher correlations by learning directional structure beyond magnitude.
+The norm correlation is a floor estimate of what supervised training can achieve.
+
+---
+
+#### Finding 6: PCA structure of sequence-level delta embeddings
+
+PCA was run on the full delta tensor (5318 x 2560 for ESM-2, 5318 x 960 for AbLang2).
+The top 2 principal components were examined with three colorings: chain (H/L), CDR/FR,
+and dataset identity.
+
+**ESM-2 PCA:**
+PC1 (18.3%) and PC2 (7.8%) together explain 26.1% of variance. The scatter shows a
+perfect orthogonal cross: H mutations (heavy chain) lie entirely on the PC1 axis (PC2
+approximately 0), and L mutations (light chain) lie entirely on the PC2 axis (PC1
+approximately 0). No mixing between chains in 2D.
+
+Mechanism: ESM-2 embeds H and L chains in separate forward passes. The 2560-dim
+sequence delta is concat(H_delta, L_delta). For an H-chain mutation, L_delta = 0
+because the L chain sequence is unchanged. The perturbation lives entirely in the first
+1280 dims. For an L-chain mutation, H_delta = 0 and the perturbation lives in the last
+1280 dims. PCA identifies these two orthogonal subspaces as PC1 and PC2 respectively.
+The cross shape is a direct geometric consequence of separate per-chain embedding, not
+an emergent property of the model's representations.
+
+CDR/FR coloring on the cross: both CDR and FR mutations appear on both arms, mixed
+throughout. FR mutations tend toward more extreme positions along each arm (larger
+distance from origin), CDR mutations cluster closer to center. CDR/FR is a secondary
+magnitude gradient within each arm, not a primary axis of variation in 2D.
+
+Dataset coloring: no dataset-specific clustering along either arm. All five datasets
+fully overlap within each arm. HER2 (N=184, all H chain) appears only on the PC1 arm
+and concentrates near the center (smaller |PC1|), consistent with its lower delta norms.
+Lysozyme appears throughout both arms, reflecting its mix of H and L chain mutations.
+
+**AbLang2 PCA:**
+PC1 (28.3%) and PC2 (14.6%) together explain 42.9% of variance -- substantially higher
+than ESM-2's 26.1%. The scatter shows no cross shape. H and L mutations are fully mixed
+throughout with no axis along which either chain dominates.
+
+Mechanism: AbLang2 processes the full VH|VL sequence in a single forward pass through a
+shared transformer. Cross-chain attention means a mutation on chain H perturbs both H and
+L token representations via attention, making the delta nonzero in both halves of the
+960-dim concatenated output. The orthogonal subspace structure requires chain-specific
+independence, which cross-chain attention breaks.
+
+The higher explained variance (42.9% vs 26.1%) follows from this: in ESM-2 each PC
+captures only one chain's variance (H or L), so two PCs are needed to cover both chains
+and each only reaches ~8–18%. In AbLang2 both chains contribute to every PC, allowing
+more total variance to be captured per component.
+
+CDR/FR coloring: the dense bulk cluster (PC1 < 0.1) mixes CDR and FR. The outlier scatter
+at high PC1 (>0.1, up to ~0.5) is almost entirely FR. AbLang2's PC1 partly encodes
+mutation magnitude -- FR mutations have larger norms and project further along PC1 -- but
+CDR/FR is not a clean separation in 2D; it emerges as a density gradient.
+
+Dataset coloring: the extreme outlier scatter (PC1 > 0.3) is almost entirely lysozyme,
+the FR-heaviest dataset (66% FR, 1382 FR mutations of 2094 total). This connects directly:
+FR → high norm → high PC1 → lysozyme (most FR mutations) dominates the extremes. In the
+bulk, all five datasets mix without clustering. HER2 is nearly invisible (N=184, tight
+near-origin cluster). No antibody-specific organization in the bulk of AbLang2's delta
+space, consistent with the embedding being mutation-level rather than antibody-level.
+
+**Summary of PCA findings:**
+The two models organize their sequence-level delta spaces in fundamentally different
+geometric forms. ESM-2 produces chain-specific orthogonal axes dominated by chain
+identity; CDR/FR and dataset are secondary gradients. AbLang2 produces a mixed,
+isotropic representation with no dedicated chain axes; mutation magnitude (driven by
+CDR/FR composition) is the primary source of structured variance in 2D. Both observations
+are direct consequences of architectural choices: separate per-chain passes (ESM-2) vs
+joint VH|VL forward pass with cross-chain attention (AbLang2).
+
+---
+
+#### Finding 7: Residue-level delta norm global statistics
+
+Residue-level deltas are extracted at the single mutation site token, unlike
+sequence-level deltas which mean-pool across the full chain. Norms are therefore
+much larger in absolute terms -- no dilution from averaging over ~200 residues.
+
+| Metric | ESM-2 residue | AbLang2 residue | ESM-2 sequence | AbLang2 sequence |
+|---|---|---|---|---|
+| min | 0.7874 | 3.2136 | 0.0254 | 0.0437 |
+| median | 3.5169 | 5.7217 | 0.0872 | 0.1084 |
+| max | 5.7526 | 7.9464 | 0.3167 | 0.6065 |
+| max/min ratio | 7.3x | 2.5x | 12.5x | 13.9x |
+
+Residue medians are ~40x (ESM-2) and ~53x (AbLang2) larger than sequence medians.
+AbLang2 residue norms have a strikingly tight range: max/min = 2.5x, compared to 7.3x
+for ESM-2 residue and 13.9x for AbLang2 sequence. AbLang2's minimum residue norm (3.21)
+is itself large -- there are effectively no near-zero residue deltas. This likely reflects
+cross-chain attention: even conservative mutations at one position propagate through the
+joint representation, establishing a minimum nonzero perturbation floor.
+
+---
+
+#### Finding 8: CDR vs FR delta norms -- residue level (major finding)
+
+AbLang2 reverses direction at the residue level. ESM-2 maintains FR > CDR throughout.
+
+| Model | Sequence direction | Sequence ratio | Residue direction | Residue ratio | Residue p |
+|---|---|---|---|---|---|
+| ESM-2 | FR > CDR | 1.275x | FR > CDR | 1.046x | 5.85e-22 |
+| AbLang2 | FR > CDR | 1.145x | CDR > FR | 1.039x | 1.47e-26 |
+
+AbLang2 sequence level: CDR median 0.1030, FR median 0.1180 (FR > CDR, 1.145x).
+AbLang2 residue level: CDR median 5.8089, FR median 5.5917 (CDR > FR, 1.039x).
+The direction flips -- AbLang2 encodes the correct biological CDR prior at the
+single-residue level, even though it inverts it at the sequence level.
+
+ESM-2 sequence level: CDR median 0.0802, FR median 0.1022 (FR > CDR, 1.275x).
+ESM-2 residue level: CDR median 3.4586, FR median 3.6193 (FR > CDR, 1.046x).
+No reversal -- ESM-2's inverse prior persists at both levels, attenuated but directionally
+consistent.
+
+Mechanistic interpretation of the AbLang2 reversal:
+The sequence-level delta is the mean of all per-residue token changes across the chain.
+A FR mutation in AbLang2 propagates broadly through the joint VH|VL representation via
+cross-chain attention, making the chain-averaged delta large. At the single-token level,
+the question is different: how much does AbLang2's embedding change at the mutated
+position itself? CDR positions in AbLang2 (trained on OAS) encode rich per-position
+amino acid diversity -- AbLang2 has strong position-specific representations for CDR
+residues that change substantially when the amino acid identity changes. FR positions
+are more conserved in OAS, so per-position token embeddings are less sensitive to
+substitution even though FR mutations spread more broadly. In short: CDR positions have
+higher single-token sensitivity in AbLang2, while FR mutations have higher global
+propagation. These two effects produce opposite CDR/FR orderings depending on which
+level is measured.
+
+ESM-2 lacks cross-chain attention and cannot produce the propagation effect that inflates
+FR sequence-level deltas. Its per-token sensitivity is determined by sequence-statistical
+conservation: FR positions are conserved across diverse proteins, making any substitution
+unusual at the token level. This same effect explains the inverse prior at both levels.
+
+7-loop breakdown -- AbLang2 residue (approximate medians):
+CDR_H3 ~6.00 (highest), CDR_L2/L3 ~5.80, CDR_H1 ~5.60, FR ~5.60, CDR_L1 ~5.55,
+CDR_H2 ~5.40 (lowest CDR).
+CDR_H3 is the highest loop at the residue level, opposite to sequence level where it
+was mid-range. AbLang2 encodes the strongest single-position sensitivity for CDR_H3,
+the most hypervariable CDR in the repertoire.
+
+7-loop breakdown -- ESM-2 residue (approximate medians):
+CDR_H2 ~3.60, FR ~3.60, CDR_H3 ~3.45, CDR_H1 ~3.40, CDR_L1/L2/L3 ~3.35.
+CDR_H2 and FR are essentially tied at residue level (both ~3.60). All loops compressed
+into a narrow range (3.35-3.60). FR has a long lower tail (down to ~1.0) -- some FR
+mutations produce very small per-token perturbations, unlike at sequence level.
+
+Implication for Experiment 7 (CDR constraint) -- updated:
+At the sequence level, both models oppose the CDR prior (FR > CDR). At the residue
+level, AbLang2 already encodes the correct prior (CDR > FR), while ESM-2 does not.
+This means the CDR constraint loss operates against ESM-2's geometry at both levels,
+but against AbLang2's geometry only at the sequence level. For experiments using
+residue-level embeddings (Exp 2, 3, 5, 6), AbLang2's token representations are
+already geometrically aligned with the CDR prior before any constraint is applied.
+
+---
+
+#### Finding 9: PCA structure of residue-level delta embeddings
+
+PCA was run on the full residue delta tensor (5318 x 1280 for ESM-2, 5318 x 480 for
+AbLang2). Three colorings were used: chain (H/L), CDR/FR, and dataset identity.
+
+**ESM-2 residue PCA:**
+PC1 (7.2%) + PC2 (6.6%) = 13.8% variance explained. Despite having no explicit H||L
+concatenation at the residue level (each row is a 1280-dim token embedding from a single
+forward pass, not concat(H, L)), ESM-2 residue PCA shows a clear cross structure with
+well-defined arms along PC1 (horizontal) and PC2 (vertical). The mechanism differs from
+the sequence-level cross: H and L mutations were processed in separate single-chain
+forward passes, so their 1280-dim residue embeddings were contextualized by entirely
+different surrounding sequences. PCA identifies the H-context embedding subspace and the
+L-context embedding subspace as the two dominant directions, producing a cross even
+without explicit concatenation.
+
+Critically, H and L chains are fully mixed within both arms -- unlike the sequence-level
+cross where each arm was nearly pure H or L. The chain-identity signal is present in
+the residue embeddings (it drives the cross shape) but is not strong enough to cleanly
+separate the two groups in 2D projection. CDR and FR are also mixed throughout both arms.
+
+A distinct outlier cluster of ~50-100 points is visible at approximately (-2.0, 0.4),
+clearly separated from the main mass. Dataset coloring shows all 5 antibody systems
+distributed throughout both the cross arms and the outlier cluster with no dataset-
+specific concentration. The cross geometry is therefore a structural property of ESM-2's
+per-chain forward passes, not an artifact of mixing datasets with different mutation
+compositions. The outlier cluster's origin is not resolved by any of the three colorings.
+
+**AbLang2 residue PCA:**
+PC1 (6.4%) + PC2 (6.1%) = 12.5% variance explained -- lower than ESM-2 residue (13.8%)
+and dramatically lower than AbLang2 sequence-level (42.9%). The scatter is a diffuse
+ellipse elongated along PC1 with no substructure: no cross, no clusters, no separation
+by chain, CDR/FR, or dataset. All 5 antibody systems are distributed uniformly throughout
+the ellipse. Dataset coloring confirms the flat structure is a property of the model's
+joint VH|VL forward pass, not of dataset mixing.
+
+One subtle asymmetry in the CDR/FR figure: CDR points extend slightly further along
+positive PC1 and into the upper PC2 region relative to FR points. This is consistent
+with the CDR > FR residue norm finding from Finding 8 -- larger per-token delta
+magnitudes scatter further from the origin in PC space. It does not indicate separation
+or clustering.
+
+**Why residue PCA explains so little variance at both levels:**
+Each residue delta row is a 1280-dim (ESM-2) or 480-dim (AbLang2) token embedding change
+that encodes position-specific, amino acid-specific information across many independent
+dimensions. The residue-level signal is genuinely high-dimensional -- it cannot be
+compressed into 2 PCs without substantial loss. At the sequence level, mean pooling over
+~200 residues averages out position-specific variation, concentrating the remaining
+mutation-level signal into fewer dimensions and explaining why sequence PCA captures far
+more variance (42.9% AbLang2, 26.1% ESM-2) than residue PCA (12.5% AbLang2, 13.8%
+ESM-2) in two components.
+
+This high dimensionality does not mean the residue vectors are uninformative. A trained
+MLP with nonlinear projections can extract signal that 2D PCA cannot surface. AbLang2
+residue maintains r=0.105 aggregate Spearman despite flat PCA, confirming that the
+signal exists in directions not captured by the top 2 PCs.
+
+**Comparison summary:**
+
+| Model   | PC1+PC2 | Structure                     | Chain separation | CDR/FR sep | Dataset sep |
+|---------|---------|-------------------------------|-----------------|------------|-------------|
+| AbLang2 | 12.5%   | Diffuse ellipse               | None            | None       | None        |
+| ESM-2   | 13.8%   | Clear cross + outlier cluster | None (arms mixed)| None      | None        |
+
+---
+
+#### Finding 10: Cross-model norm agreement
+
+Spearman correlation was computed between ESM-2 and AbLang2 delta norm vectors
+across all 5318 mutations. This measures whether the two models rank the same mutations
+as large vs small perturbations -- i.e., how much shared information their embedding
+geometries encode about mutation magnitude.
+
+| Level    | r      | p           | Shared variance (r²) |
+|----------|--------|-------------|----------------------|
+| Sequence | 0.3617 | 4.66e-164   | 13%                  |
+| Residue  | 0.0522 | 1.41e-04    | <1%                  |
+
+**Sequence level (r=0.3617):** Moderate positive agreement -- both models partially
+rank the same mutations as large. However, r²=0.13 means 87% of variance is model-
+specific; the two models are substantially independent. This is consistent with AbLang2
+having 2.6x higher DMS Spearman (0.216 vs 0.083): AbLang2 captures mutation-relevant
+signal that ESM-2 does not, even though they share a partial common axis.
+
+**Residue level (r=0.0522):** Near-zero cross-model agreement. The p-value (1.41e-04)
+reaches significance only because N=5318; the effect size is negligible. The models
+assign essentially uncorrelated per-token delta magnitudes to the same mutations. This
+makes sense given the level-specific DMS Spearman results: ESM-2 residue norms are
+uninformative (r=0.006, not significant), while AbLang2 residue norms carry moderate
+signal (r=0.105). ESM-2 assigns residue norm rankings that are effectively random with
+respect to both DMS scores and AbLang2's rankings.
+
+**Scatter plot observations:**
+At the sequence level, the mass of points sits below the y=x diagonal -- AbLang2 norms
+are generally smaller than ESM-2 norms for most mutations. However, FR mutations show
+a prominent upward plume: many FR points reach AbLang2 sequence norms of 0.3-0.6 while
+their ESM-2 norms remain below 0.2. CDR points cluster tightly near or below the
+diagonal. The FR-specific amplification in AbLang2 is mechanistically interpretable:
+FR mutations propagate through cross-chain attention to affect the full VH|VL
+representation, inflating AbLang2 sequence norms for FR mutations relative to ESM-2's
+chain-isolated encoding.
+
+At the residue level, the cloud sits above the y=x diagonal throughout -- AbLang2
+residue norms are systematically larger than ESM-2 residue norms (consistent with
+Finding 7: AbLang2 residue medians are ~1.63x larger). The cloud is roughly circular
+with no positive slope, confirming near-zero rank agreement.
+
+**Implication for experiment design:**
+The near-zero cross-model agreement at the residue level means ESM-2 and AbLang2
+residue delta vectors are largely complementary -- they encode different per-token
+information about the mutation. Concatenating both models' residue embeddings as MLP
+input (e.g., [esm2_res_delta || ablang2_res_delta] = 1280+480 = 1760 dims) may capture
+more signal than either alone, since the two sources are nearly independent. At the
+sequence level, the moderate agreement (r=0.36) implies that combining the two models'
+sequence deltas will show diminishing returns relative to the residue level combination.
+This is relevant to the design of any multi-model experiment beyond the current matrix.
 
 ---
 
 ## Open Questions
 
-- Experiment 6 (delta residue + max/mean pool): exact formulation TBD
-- NB04 open questions (to be answered by running the notebook):
-  - Does AbLang2 show the same inverse CDR prior as ESM-2 (FR delta norms > CDR delta norms)?
-  - Does cross-chain attention mix the H/L subspaces in AbLang2 PCA, or is the orthogonal cross structure still visible?
-  - Is residue-level Spearman stronger or weaker than sequence-level for both models?
-  - Do ESM-2 and AbLang2 agree on which mutations are large vs small (high cross-model Spearman)?
-- Whether the CDR constraint helps or hurts ESM-2 (inverse prior finding makes this genuinely uncertain)
+- NB04 open questions -- all answered:
+  - [ANSWERED] Does AbLang2 show the same inverse CDR prior as ESM-2?
+    Sequence level: YES, FR > CDR in both (ESM-2 1.275x, AbLang2 1.145x).
+    Residue level: NO -- AbLang2 reverses to CDR > FR (1.039x). ESM-2 stays FR > CDR (1.046x).
+  - [ANSWERED] Does cross-chain attention mix the H/L subspaces in AbLang2 PCA? YES --
+    the orthogonal cross is completely absent. PC1+PC2 = 42.9% vs ESM-2's 26.1%.
+  - [ANSWERED] Is residue-level Spearman stronger or weaker than sequence-level?
+    Weaker for both models. ESM-2 residue aggregate r=0.0057 (p=0.677, not significant).
+    AbLang2 residue aggregate r=0.1052, retaining ~half its sequence-level signal.
+  - [ANSWERED] Do ESM-2 and AbLang2 agree on which mutations are large vs small?
+    Partially at sequence level (r=0.3617, 13% shared variance), near-zero at residue
+    level (r=0.0522). Models are largely complementary at residue level.
+
+- CDR constraint geometry is now more nuanced:
+  - ESM-2: inverse prior at both levels -- constraint opposes model geometry throughout
+  - AbLang2: inverse prior at sequence level only -- residue-level geometry already
+    encodes correct CDR > FR prior. Residue-based experiments (Exp 2, 3, 5) with AbLang2
+    may not need constraint correction; the constraint will fire less and have less impact.
+
+- Open training questions:
+  - Does global context (Exp 3: delta_residue + wildtype) improve over local delta alone (Exp 2)?
+  - Does PCA reduction (Exp 5) improve over raw delta residue (Exp 2)?
+  - Which strategy best for ESM-2 vs AbLang2 -- do they favor different inputs?
+  - Does the CDR constraint help or hurt each model (and does direction differ by model)?
+  - Optimal lambda for constraint sweep [0, 0.1, 0.5, 1.0]?
+
+---
+
+## Notebook 05: MLP Training
+
+### Infrastructure (complete as of this writing)
+
+Two separate notebooks to avoid merge conflicts (Oscar: 05_oscar.ipynb, Lucas: 05_lucas.ipynb).
+Identical setup/data-loading cells with shared random_state=42 for reproducible, identical splits.
+
+#### Splits (verified)
+
+| Split | N | % |
+|---|---|---|
+| Train | 4256 | 80.0% |
+| Val | 531 | 10.0% |
+| Test | 531 | 10.0% |
+
+Per-antibody counts confirmed identical across both notebooks:
+Train: lysozyme=1676, EGFR=857, VEGF=790, Ang2=785, HER2=148
+Val:   lysozyme=209, EGFR=107, VEGF=99, Ang2=98, HER2=18
+Test:  lysozyme=209, EGFR=107, VEGF=99, Ang2=98, HER2=18
+
+HER2 val/test N=18 -- Spearman on 18 samples is noisy; report but note unreliability.
+
+#### Training architecture (src/training/trainer.py)
+
+- MLP: [input_dim -> 256 -> 128 -> 1], ReLU + Dropout(0.1) after each hidden layer
+- Optimizer: Adam, lr=1e-3
+- Loss: MSE
+- Early stopping: patience=10 on aggregate val Spearman (all 5 datasets pooled)
+- Evaluation: Spearman per dataset + aggregate (all 5) + aggregate excluding HER2
+- tqdm: outer epoch bar (train_mse, val_rho, best, patience) + inner batch bar (current batch mse)
+- W&B: per-epoch log + summary with best-epoch metrics
+- CDR constraint: lambda_cdr=0.0 by default; set >0 for Exp 6
+
+#### Experiment assignments
+
+Oscar (05_oscar.ipynb): Exp 4 (DELTA_SEQUENCE) and Exp 3 (DELTA_RESIDUE_PLUS_WILD)
+Lucas (05_lucas.ipynb): Exp 2 (DELTA_RESIDUE) and Exp 5 (DELTA_RESIDUE_REDUCED via PCA)
+Exp 6 (CDR constraint): both, on best-performing strategy from Exp 2-5
+
+#### Results
+
+NOT YET RUN. Dataset sanity checks (input_dim verification) and training runs pending.
+
+---
+
+## Still To Do
+
+### Immediate (NB05)
+- Run dataset sanity check cells (verify input_dims: ESM-2 2560/1280/3840, AbLang2 960/480/1440)
+- Run training experiments 2-5 in respective notebooks
+- Update md-*-train-out and md-*-test-out markdown cells with confirmed results
+- Run summary table cell in each notebook
+- Determine best-performing strategy from Exp 2-5 for Exp 6
+
+### After Exp 2-5
+- Exp 6: CDR constraint lambda sweep [0, 0.1, 0.5, 1.0] on best strategy, both models
+- Compare ESM-2 constraint effect vs AbLang2 constraint effect (key neurosymbolic result)
+
+### NB04 housekeeping (pending commit)
+- Update md-dms-dist-out: HER2 description correction (spike at 1.0, secondary peak at
+  0.3-0.4, near-empty 0.0-0.2, only ~4 scores below 0.2 -- NOT bimodal with spike at 0.0)
+- Full markdown pass for explainability (per feedback_notebook_markdown.md)
+- Commit NB04 + plots.py + PROGRESS.md
+
+### Later
+- NB06: Analysis and figures
+- train_sabdab / evaluate_sabdab implementation (Task 2)
+- SAbDab binding affinity experiments
+
+---

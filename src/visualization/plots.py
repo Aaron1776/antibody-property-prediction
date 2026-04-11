@@ -372,6 +372,50 @@ def plot_model_comparison_norms(
 
 
 # ---------------------------------------------------------------------------
+# NB04: DMS score distributions
+# ---------------------------------------------------------------------------
+
+def plot_dms_score_distributions(
+    dms_scores: np.ndarray,
+    dms_names: np.ndarray,
+    output_dir: Path,
+) -> None:
+    """Histogram of MinMax-normalized DMS scores for each dataset.
+
+    Answers: what does the label distribution look like per antibody?
+    Flags bimodal or skewed distributions that may affect training and evaluation.
+
+    Parameters
+    ----------
+    dms_scores:
+        Per-mutation DMS scores, MinMax-normalized per dataset to [0, 1].
+    dms_names:
+        Dataset label for each mutation (same length as dms_scores).
+    """
+    datasets = list(dict.fromkeys(dms_names))
+    n = len(datasets)
+    fig, axes = plt.subplots(1, n, figsize=(4 * n, 4), sharey=False)
+
+    for ax, ds in zip(axes, datasets):
+        mask = dms_names == ds
+        scores = dms_scores[mask]
+        color = _DATASET_COLORS[datasets.index(ds) % len(_DATASET_COLORS)]
+        ax.hist(scores, bins=30, color=color, alpha=0.8, edgecolor='white', linewidth=0.4)
+        ax.set_title(ds.replace('_', '\n'), fontsize=8)
+        ax.set_xlabel('DMS score (normalized)', fontsize=8)
+        ax.set_ylabel('Count' if ax is axes[0] else '', fontsize=8)
+        ax.tick_params(labelsize=7)
+        ax.text(
+            0.97, 0.97, f'N={mask.sum()}',
+            transform=ax.transAxes, ha='right', va='top', fontsize=7,
+        )
+
+    fig.suptitle('DMS score distributions by dataset', fontsize=11, y=1.01)
+    plt.tight_layout()
+    _save(fig, output_dir, 'dms_score_distributions.png')
+
+
+# ---------------------------------------------------------------------------
 # NB06: training analysis figures (stubs)
 # ---------------------------------------------------------------------------
 
