@@ -153,7 +153,7 @@ def train_abagym(
             'seed': config.seed,
             'input_dim': input_dim,
         },
-        reinit=True,
+        reinit=False,
     )
 
     train_history: List[float] = []
@@ -171,13 +171,7 @@ def train_abagym(
         epoch_mse = 0.0
         n_batches = 0
 
-        batch_bar = tqdm(
-            train_loader,
-            desc=f"  epoch {epoch + 1:>3}",
-            leave=False,
-            unit="batch",
-        )
-        for x, y, meta in batch_bar:
+        for x, y, meta in train_loader:
             x = x.to(device)
             y = y.to(device)
 
@@ -197,7 +191,6 @@ def train_abagym(
 
             epoch_mse += task_loss.item()
             n_batches += 1
-            batch_bar.set_postfix(mse=f"{task_loss.item():.4f}")
 
         avg_train_mse = epoch_mse / n_batches
         train_history.append(avg_train_mse)
