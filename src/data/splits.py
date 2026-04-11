@@ -53,7 +53,7 @@ def make_stratified_splits(
     train_idx, val_idx, test_idx = [], [], []
 
     for ds_name, group in df.groupby(dataset_col):
-        idx = group.index.to_numpy()
+        idx = group.index.to_numpy().copy()
         rng.shuffle(idx)
 
         n = len(idx)
