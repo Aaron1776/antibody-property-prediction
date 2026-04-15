@@ -423,6 +423,8 @@ def plot_spearman_by_dataset(
     results: Dict[str, float],
     title: str,
     output_dir: Path,
+    model_name: str = 'ESM-2',
+    dataset_order: Optional[List[str]] = None,
     filename: str = 'spearman_by_dataset.png',
 ) -> None:
     """Horizontal bar chart of Spearman correlation per dataset.
@@ -435,14 +437,25 @@ def plot_spearman_by_dataset(
         Mapping of dataset name -> Spearman r (test set).
     title:
         Plot title string.
+    model_name:
+        'ESM-2' or 'AbLang2'. Controls bar color.
+    dataset_order:
+        If provided, datasets are plotted in this order (bottom to top).
+        Must contain the same keys as results. If None, sorts by value
+        ascending.
     """
     _HER2 = 'HER2_2021_trastuzumab'
-    datasets = sorted(results.keys(), key=lambda k: results[k])
+
+    if dataset_order is not None:
+        datasets = list(dataset_order)
+    else:
+        datasets = sorted(results.keys(), key=lambda k: results[k])
+
     values = [results[d] for d in datasets]
-    colors = [
-        '#aec7e8' if d == _HER2 else _MODEL_COLORS['ESM-2']
-        for d in datasets
-    ]
+    base_color = _MODEL_COLORS.get(model_name, _MODEL_COLORS['ESM-2'])
+    # HER2 gets a desaturated version of the model color
+    her2_color = '#aec7e8' if model_name == 'ESM-2' else '#f5c6a0'
+    colors = [her2_color if d == _HER2 else base_color for d in datasets]
 
     fig, ax = plt.subplots(figsize=(8, 4))
     bars = ax.barh(range(len(datasets)), values, color=colors, alpha=0.85)
