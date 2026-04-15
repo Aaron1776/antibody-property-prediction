@@ -421,35 +421,150 @@ def plot_dms_score_distributions(
 
 def plot_spearman_by_dataset(
     results: Dict[str, float],
-    model_name: str,
-    strategy: str,
+    title: str,
     output_dir: Path,
+    filename: str = 'spearman_by_dataset.png',
 ) -> None:
-    """Bar chart of Spearman correlation per dataset.
+    """Horizontal bar chart of Spearman correlation per dataset.
 
-    HER2 should be displayed separately or annotated as an outlier
-    (bimodal score distribution, all CDR H3).
+    HER2 is annotated separately (N=18, unreliable).
 
-    TODO: implement in NB06.
+    Parameters
+    ----------
+    results:
+        Mapping of dataset name -> Spearman r (test set).
+    title:
+        Plot title string.
     """
-    raise NotImplementedError("Implement in NB06.")
+    _HER2 = 'HER2_2021_trastuzumab'
+    datasets = sorted(results.keys(), key=lambda k: results[k])
+    values = [results[d] for d in datasets]
+    colors = [
+        '#aec7e8' if d == _HER2 else _MODEL_COLORS['ESM-2']
+        for d in datasets
+    ]
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    bars = ax.barh(range(len(datasets)), values, color=colors, alpha=0.85)
+    ax.set_yticks(range(len(datasets)))
+    ax.set_yticklabels([d.replace('_', ' ') for d in datasets], fontsize=9)
+    ax.set_xlabel('Spearman r (test set)', fontsize=11)
+    ax.set_title(title, fontsize=11)
+    ax.axvline(0, color='black', linewidth=0.8)
+    ax.set_xlim(-0.05, 1.0)
+    ax.grid(axis='x', alpha=0.3)
+
+    for bar, val, ds in zip(bars, values, datasets):
+        label = f'{val:.3f}'
+        if ds == _HER2:
+            label += ' (N=18)'
+        ax.text(
+            max(val + 0.01, 0.01), bar.get_y() + bar.get_height() / 2,
+            label, va='center', fontsize=8,
+        )
+
+    plt.tight_layout()
+    _save(fig, output_dir, filename)
 
 
-def plot_lambda_sweep(
-    results: Dict[float, Dict],
-    model_name: str,
-    strategy: str,
+def plot_embedding_strategy_comparison(
+    strategy_results: Dict[str, Dict[str, float]],
     output_dir: Path,
+    filename: str = 'strategy_comparison.png',
 ) -> None:
-    """Line plot of Spearman correlation vs lambda for CDR constraint sweep.
+    """Grouped bar chart comparing Spearman excl HER2 across embedding strategies.
 
-    X-axis: lambda values [0, 0.1, 0.5, 1.0].
-    Y-axis: aggregate Spearman (and optionally per-dataset lines).
-    One line per dataset, plus aggregate.
-
-    TODO: implement in NB06.
+    Parameters
+    ----------
+    strategy_results:
+        Nested dict: strategy_label -> model_name -> excl_her2 Spearman.
+        E.g. {'Delta Residue': {'ESM-2': 0.6131, 'AbLang2': 0.6353}, ...}
+        Strategies are plotted in the order they appear in the dict.
     """
-    raise NotImplementedError("Implement in NB06.")
+    strategies = list(strategy_results.keys())
+    models = ['ESM-2', 'AbLang2']
+    x = np.arange(len(strategies))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    for i, model in enumerate(models):
+        vals = [strategy_results[s][model] for s in strategies]
+        offset = (i - 0.5) * width
+        bars = ax.bar(
+            x + offset, vals, width,
+            label=model,
+            color=_MODEL_COLORS[model],
+            alpha=0.85,
+        )
+        for bar, val in zip(bars, vals):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 0.005,
+                f'{val:.3f}',
+                ha='center', va='bottom', fontsize=8,
+            )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(strategies, fontsize=10)
+    ax.set_ylabel('Spearman r excl HER2 (test set)', fontsize=11)
+    ax.set_title('Embedding strategy comparison -- ESM-2 vs AbLang2', fontsize=11)
+    ax.set_ylim(0, 0.80)
+    ax.legend(fontsize=10)
+    ax.grid(axis='y', alpha=0.3)
+    ax.axhline(0, color='black', linewidth=0.8)
+
+    plt.tight_layout()
+    _save(fig, output_dir, filename)
+
+
+def plot_constraint_sweep(
+    sweep_data: Dict[str, Dict[str, Dict[float, float]]],
+    lambdas: List[float],
+    output_dir: Path,
+    filename: str = 'constraint_sweep.png',
+) -> None:
+    """Line plot of Spearman excl HER2 vs lambda for CDR constraint sweep.
+
+    Shows all three formulations (batch-mean, pairwise margin=0.0,
+    pairwise margin=0.1) side by side for ESM-2 and AbLang2.
+
+    Parameters
+    ----------
+    sweep_data:
+        Nested dict: model_name -> formulation_label -> lambda -> excl_her2.
+        E.g. {'ESM-2': {'Batch-mean': {0.0: 0.6946, ...}, ...}, ...}
+    lambdas:
+        List of lambda values in the order they appear on the x-axis.
+    """
+    models = list(sweep_data.keys())
+    formulations = list(sweep_data[models[0]].keys())
+
+    line_styles = ['-', '--', ':']
+    line_widths = [2.0, 1.8, 1.8]
+
+    fig, axes = plt.subplots(1, len(models), figsize=(12, 5), sharey=True)
+
+    for ax, model in zip(axes, models):
+        color = _MODEL_COLORS[model]
+        for form, ls, lw in zip(formulations, line_styles, line_widths):
+            vals = [sweep_data[model][form][lam] for lam in lambdas]
+            ax.plot(
+                lambdas, vals,
+                linestyle=ls, linewidth=lw,
+                color=color, marker='o', markersize=5,
+                label=form,
+            )
+        ax.set_title(model, fontsize=12)
+        ax.set_xlabel('Lambda (constraint weight)', fontsize=10)
+        ax.set_xticks(lambdas)
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=9)
+
+    axes[0].set_ylabel('Spearman r excl HER2 (test set)', fontsize=11)
+    fig.suptitle('CDR constraint lambda sweep -- all formulations', fontsize=12)
+    plt.tight_layout()
+    _save(fig, output_dir, filename)
 
 
 def plot_learning_curves(
@@ -466,10 +581,18 @@ def plot_learning_curves(
     ----------
     metric:
         Name of the metric being plotted, e.g. 'MSE' or 'Spearman'.
-
-    TODO: implement in NB06.
     """
-    raise NotImplementedError("Implement in NB06.")
+    epochs = list(range(1, len(train_history) + 1))
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(epochs, train_history, label=f'Train {metric}', linewidth=1.5)
+    ax.plot(epochs, val_history, label=f'Val {metric}', linewidth=1.5)
+    ax.set_xlabel('Epoch', fontsize=11)
+    ax.set_ylabel(metric, fontsize=11)
+    ax.set_title(f'{model_name} -- {run_name} learning curves', fontsize=11)
+    ax.legend(fontsize=10)
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+    _save(fig, output_dir, f'learning_curves_{_sanitize_name(run_name)}.png')
 
 
 def plot_violation_heatmap(
@@ -485,21 +608,6 @@ def plot_violation_heatmap(
     Violation: a sample where |FR_predicted| > |CDR_predicted| in a given batch.
     Shows how often the constraint fires, broken down by dataset and CDR loop.
 
-    TODO: implement in NB06.
+    TODO: implement if needed.
     """
-    raise NotImplementedError("Implement in NB06.")
-
-
-def plot_embedding_strategy_comparison(
-    results: Dict[str, Dict],
-    model_name: str,
-    output_dir: Path,
-) -> None:
-    """Compare Spearman correlations across embedding strategies (Exp 2-6).
-
-    Groups by strategy with one bar per dataset, or one grouped bar per
-    strategy. Enables direct comparison of which input formulation works best.
-
-    TODO: implement in NB06.
-    """
-    raise NotImplementedError("Implement in NB06.")
+    raise NotImplementedError("Implement if needed.")
