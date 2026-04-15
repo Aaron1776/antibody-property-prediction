@@ -1014,20 +1014,240 @@ Oscar (05_oscar.ipynb): Exp 4 (DELTA_SEQUENCE) and Exp 3 (DELTA_RESIDUE_PLUS_WIL
 Lucas (05_lucas.ipynb): Exp 2 (DELTA_RESIDUE) and Exp 5 (DELTA_RESIDUE_REDUCED via PCA)
 Exp 6 (CDR constraint): both, on best-performing strategy from Exp 2-5
 
+#### Bugs fixed during NB05 setup
+
+1. `src/data/datasets.py` DELTA_RESIDUE_PLUS_WILD: wildtype index loaded from JSON as
+   `{row_int: dms_name}` but was being looked up as `wt_sequence_index[dms_name]`.
+   Fix: invert at load time to `{dms_name: row_int}`. COMMITTED (f5ff08a).
+
+2. Both notebooks: `load_abagym_antibody(DATA_DIR / 'abagym_antibody.csv')` should be
+   `load_abagym_antibody(DATA_DIR)`. The function appends the filename internally.
+
+#### Sanity checks (verified)
+
+All input dims confirmed correct:
+- ESM-2 DELTA_SEQUENCE: 2560
+- AbLang2 DELTA_SEQUENCE: 960
+- ESM-2 DELTA_RESIDUE_PLUS_WILD: 3840 (1280 + 2560)
+- AbLang2 DELTA_RESIDUE_PLUS_WILD: 1440 (480 + 960)
+- ESM-2 DELTA_RESIDUE: 1280
+- AbLang2 DELTA_RESIDUE: 480
+- ESM-2 DELTA_RESIDUE_REDUCED (PCA 64): 64, explained variance = 0.810
+- AbLang2 DELTA_RESIDUE_REDUCED: not yet verified (training cell only)
+
 #### Results
 
-NOT YET RUN. Dataset sanity checks (input_dim verification) and training runs pending.
+---
+
+### Experiment 4: Delta Sequence (Oscar)
+
+**Input:** `mean_pool(mutant) - mean_pool(wt)` | ESM-2=2560-dim, AbLang2=960-dim
+
+**Val results (best epoch):**
+
+| Model | Best epoch | Val Spearman (all) | Ang2 | EGFR | HER2 | VEGF | lysozyme |
+|---|---|---|---|---|---|---|---|
+| ESM-2 | 24 | 0.6381 | 0.7034 | 0.7259 | 0.4370 | 0.4921 | 0.6049 |
+| AbLang2 | 35 | 0.6552 | 0.7980 | 0.6540 | 0.3963 | 0.6651 | 0.5413 |
+
+**Test results:**
+
+| Model | Spearman (all) | Spearman (excl HER2) | HER2 | Ang2 | EGFR | VEGF | lysozyme |
+|---|---|---|---|---|---|---|---|
+| ESM-2 | 0.6122 | 0.6026 | 0.8262* | 0.6470 | 0.6604 | 0.5416 | 0.5632 |
+| AbLang2 | 0.6024 | 0.6034 | 0.5418 | 0.7303 | 0.5265 | 0.7451 | 0.5258 |
+
+*ESM-2 HER2 test=0.826 vs val=0.437 -- high variance from N=18, not reliable.
+
+**Key findings:**
+
+Both models far exceed the EDA norm baseline (ESM-2: 0.083→0.638 val, AbLang2: 0.216→0.655 val).
+The full directional delta vector carries substantially more signal than norm magnitude alone.
+
+Excluding HER2, the models are essentially tied on test (ESM-2 0.603, AbLang2 0.603).
+The dataset-level split is sharp and consistent with EDA predictions:
+- ESM-2 leads on EGFR (+0.134) and lysozyme (+0.037) -- the FR-heavy datasets
+- AbLang2 leads on Ang2 (+0.083) and VEGF (+0.204) -- the CDR-heavy G6-scaffold datasets
+
+AbLang2's 2.6x EDA advantage in norm Spearman nearly vanishes once the MLP is trained
+on the full vector. ESM-2's delta space contains rich directional signal that the norm
+does not capture.
+
+---
+
+### Experiment 3: Delta Residue + Full Wildtype (Oscar)
+
+**Input:** `concat(delta_residue[mut_pos], mean_pool(wt_sequence))` | ESM-2=3840-dim, AbLang2=1440-dim
+
+**Val results (best epoch):**
+
+| Model | Best epoch | Val Spearman (all) | Ang2 | EGFR | HER2 | VEGF | lysozyme |
+|---|---|---|---|---|---|---|---|
+| ESM-2 | 78 | 0.7006 | 0.7899 | 0.6116 | 0.6388 | 0.7437 | 0.6328 |
+| AbLang2 | 50 | 0.6621 | 0.7807 | 0.6047 | 0.3942 | 0.6182 | 0.6280 |
+
+**Test results:**
+
+| Model | Spearman (all) | Spearman (excl HER2) | HER2 | Ang2 | EGFR | VEGF | lysozyme |
+|---|---|---|---|---|---|---|---|
+| ESM-2 | 0.6963 | 0.6946 | 0.7068 | 0.8294 | 0.6621 | 0.7815 | 0.5737 |
+| AbLang2 | 0.6640 | 0.6693 | 0.5189 | 0.7610 | 0.5909 | 0.6802 | 0.6259 |
+
+**Key findings:**
+
+Exp 3 outperforms Exp 4 for both models (ESM-2: 0.603→0.695, AbLang2: 0.603→0.669, excl HER2).
+Adding wildtype context adds substantial value -- the wildtype embedding provides global scaffold
+identity that the per-position delta alone does not encode.
+
+ESM-2 now clearly leads AbLang2 (0.695 vs 0.669 excl HER2). The gain is larger for ESM-2
+(+0.092 vs +0.066) because global antibody context compensates for ESM-2's per-chain blind spot --
+AbLang2 already encodes cross-chain context via joint VH|VL forward passes, so the explicit
+wildtype embedding adds less marginal information.
+
+ESM-2 best epoch = 78 (vs 24 for Exp 4) -- the 3840-dim input requires more epochs to converge.
+ESM-2 HER2 val = 0.639 (vs 0.437 in Exp 4) -- more stable, consistent with test 0.707.
+
+**Current best:** ESM-2 Exp 3, test Spearman excl HER2 = 0.6946.
+
+**Framing note:** Foundation models are frozen throughout all experiments. No fine-tuning
+occurs. All performance differences reflect what the MLP regression head can extract
+from pre-computed, fixed embeddings. "ESM-2 performs better" means the MLP trained on
+ESM-2 embeddings performs better -- the foundation model weights do not change.
+
+**Information-scaling hypothesis:** The MLP trained on ESM-2 embeddings scales more
+steeply with input richness than the MLP trained on AbLang2 embeddings. AbLang2 encodes
+global antibody context internally (joint VH|VL forward pass), so its embeddings already
+contain cross-chain and scaffold context -- the wildtype embedding adds less marginal
+information to the AbLang2 MLP. ESM-2 embeds chains separately with no cross-chain
+attention, so the MLP lacks global scaffold context unless it is provided explicitly.
+Adding the wildtype embedding to the ESM-2 MLP fills this gap, producing a larger gain.
+
+Testable prediction: Exp 2 (single-token delta residue, no global context) should
+flip back to AbLang2 MLP leading, since the input is even more local than Exp 4.
+
+---
+
+### Oscar Experiment Summary (Exp 3 vs Exp 4)
+
+| Experiment | Model | Spearman (all) | Spearman (excl HER2) |
+|---|---|---|---|
+| Exp4: Delta Sequence | ESM-2 | 0.6122 | 0.6026 |
+| Exp4: Delta Sequence | AbLang2 | 0.6024 | 0.6034 |
+| Exp3: Delta Res + WT | ESM-2 | **0.6963** | **0.6946** |
+| Exp3: Delta Res + WT | AbLang2 | 0.6640 | 0.6693 |
+
+---
+
+### Experiment 2: Delta Residue Only (Lucas)
+
+**Input:** `mutant_residue_emb[mut_pos] - wt_residue_emb[mut_pos]` | ESM-2=1280-dim, AbLang2=480-dim
+
+**Val results (best epoch):**
+
+| Model | Best epoch | Val Spearman (all) |
+|---|---|---|
+| ESM-2 | 10 | 0.5715 |
+| AbLang2 | 19 | 0.6663 |
+
+**Test results:**
+
+| Model | Spearman (all) | Spearman (excl HER2) | HER2 | Ang2 | EGFR | VEGF | lysozyme |
+|---|---|---|---|---|---|---|---|
+| ESM-2 | 0.5834 | 0.5799 | 0.7649 | 0.6381 | 0.6287 | 0.4920 | 0.5977 |
+| AbLang2 | 0.6198 | 0.6153 | 0.6466 | 0.7605 | 0.5932 | 0.5838 | 0.5419 |
+
+**Key findings:**
+
+AbLang2 leads ESM-2 clearly (0.615 vs 0.580 excl HER2, +0.035). The information-scaling
+hypothesis prediction holds: with only a single-token residue delta and no global context,
+AbLang2's domain-specific pretraining advantages show through.
+
+ESM-2 converges at epoch 10 -- the fastest of any experiment -- indicating the signal
+available in a single ESM-2 residue delta is limited and quickly exhausted. Consistent
+with EDA finding that ESM-2 residue delta norms are nearly uninformative (aggregate r=0.006).
+
+AbLang2 Exp 2 (0.615) exceeds AbLang2 Exp 4 (0.603): the residue-level delta is more
+informative for AbLang2 than the sequence-level delta. Consistent with EDA showing
+AbLang2 encodes the correct CDR prior at the residue level (CDR > FR, r=0.105). The
+sequence delta averages over the full chain and dilutes this position-specific signal.
+
+ESM-2 goes the other direction: Exp 2 (0.580) < Exp 4 (0.603). Residue-level is worse
+for ESM-2, consistent with its per-token embeddings being less sensitive to amino acid
+identity at individual positions.
+
+**Confirmed pattern across Oscar + Lucas experiments:**
+
+| Exp | Input | ESM-2 (excl HER2) | AbLang2 (excl HER2) | Leader |
+|---|---|---|---|---|
+| 2 | Residue delta only | 0.580 | 0.615 | AbLang2 +0.035 |
+| 4 | Sequence delta only | 0.603 | 0.603 | tied |
+| 3 | Residue delta + wildtype | **0.695** | 0.669 | ESM-2 +0.026 |
+
+As input richness increases, the ESM-2 MLP goes from behind to tied to ahead. This is
+the central empirical finding of the project so far.
+
+---
+
+### Experiment 5: Delta Residue + PCA(64) (Lucas)
+
+**Input:** `PCA(delta_residue[mut_pos], n=64)` | ESM-2=64-dim, AbLang2=64-dim
+PCA fit on train split only (4256 samples). ESM-2 explained variance=0.810, AbLang2=0.798.
+
+**Val results (best epoch):**
+
+| Model | Best epoch | Val Spearman (all) |
+|---|---|---|
+| ESM-2 | 13 | 0.5263 |
+| AbLang2 | 20 | 0.5887 |
+
+**Test results:**
+
+| Model | Spearman (all) | Spearman (excl HER2) | HER2 | Ang2 | EGFR | VEGF | lysozyme |
+|---|---|---|---|---|---|---|---|
+| ESM-2 | 0.4999 | 0.5004 | 0.4878 | 0.5152 | 0.5449 | 0.4136 | 0.5492 |
+| AbLang2 | 0.5628 | 0.5598 | 0.5750 | 0.7333 | 0.6122 | 0.3905 | 0.5285 |
+
+**Key findings:**
+
+PCA compression hurts both models vs raw delta residue (Exp 2):
+- ESM-2: 0.580→0.500 (-0.080)
+- AbLang2: 0.615→0.560 (-0.055)
+
+Retaining 80% of variance is not sufficient. The signal for mutation effect prediction
+is distributed across dimensions that PCA does not prioritize -- PCA selects for
+high-variance directions, which are not the same as high-predictive-signal directions.
+ESM-2 takes the larger hit (-0.080 vs -0.055), consistent with its useful signal being
+more spread across the full 1280-dim residue space.
+
+AbLang2 still leads ESM-2 (0.560 vs 0.500 excl HER2), and the gap (+0.060) is the
+largest of any experiment -- PCA amplifies the disadvantage of ESM-2's more distributed
+signal structure.
+
+---
+
+### Full Experiment Summary (Exp 2-5, test Spearman excl HER2)
+
+| Exp | Input | ESM-2 | AbLang2 | Leader |
+|---|---|---|---|---|
+| 5 | Residue delta + PCA(64) | 0.500 | 0.560 | AbLang2 +0.060 |
+| 2 | Residue delta only | 0.580 | 0.615 | AbLang2 +0.035 |
+| 4 | Sequence delta only | 0.603 | 0.603 | tied |
+| 3 | Residue delta + wildtype | **0.695** | **0.669** | ESM-2 +0.026 |
+
+As input richness increases, the ESM-2 MLP goes from behind to tied to ahead.
+This is the central empirical finding of the project.
+
+**Best strategy:** Exp 3 (delta residue + wildtype) for both models.
+**Exp 6 decision:** CDR constraint lambda sweep on Exp 3 strategy for both ESM-2 and AbLang2.
 
 ---
 
 ## Still To Do
 
-### Immediate (NB05)
-- Run dataset sanity check cells (verify input_dims: ESM-2 2560/1280/3840, AbLang2 960/480/1440)
-- Run training experiments 2-5 in respective notebooks
-- Update md-*-train-out and md-*-test-out markdown cells with confirmed results
-- Run summary table cell in each notebook
-- Determine best-performing strategy from Exp 2-5 for Exp 6
+### Immediate (NB05/06)
+- Exp 6: CDR constraint lambda sweep [0, 0.1, 0.5, 1.0] on Exp 3 strategy, both models
+- Run summary table cells in both notebooks
+- Commit and push NB05 notebooks + PROGRESS.md
 
 ### After Exp 2-5
 - Exp 6: CDR constraint lambda sweep [0, 0.1, 0.5, 1.0] on best strategy, both models
