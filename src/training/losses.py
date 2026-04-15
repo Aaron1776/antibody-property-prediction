@@ -6,7 +6,7 @@ CDR constraint loss (Task 1 only):
     Encodes the biological prior that CDR mutations should have higher
     predicted effect magnitude than framework mutations.
 
-    constraint_loss = mean(ReLU(|FR_predicted| - |CDR_predicted|))
+    constraint_loss = ReLU(mean(|FR_predicted|) - mean(|CDR_predicted|))
 
     This loss fires only when the model predicts a larger absolute effect
     for FR mutations than for CDR mutations. It is zero when the model
@@ -44,7 +44,7 @@ def cdr_constraint_loss(
     Returns
     -------
     Scalar tensor. Returns 0.0 (as a tensor) if the batch has no FR
-    mutations or no CDR mutations, since the pairwise comparison is
+    mutations or no CDR mutations, since the group comparison is
     undefined.
 
     Notes
