@@ -1375,7 +1375,9 @@ ESM-2 leads on 4 of 5 datasets (excl HER2). AbLang2 leads on lysozyme 2019 D441
 
 ## Still To Do
 
-- train_sabdab / evaluate_sabdab (Task 2, if time permits)
+Project complete. SAbDab (Task 2) not pursued -- was contingent on the CDR
+constraint showing a positive result to inform an biologically-grounded affinity
+regression head. Constraint showed no benefit; SAbDab dropped.
 
 ### Later
 - NB06: Analysis and figures
