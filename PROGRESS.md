@@ -1340,9 +1340,41 @@ weakness. The neurosymbolic finding stands.
 
 ---
 
+---
+
+### NB07: Analysis and Figures
+
+Three figures generated from confirmed test results. No model loading required --
+results serialized from NB06 via experiment_results.json.
+
+**Figure 1: Embedding strategy comparison**
+Grouped bar chart (4 strategies x 2 models, excl HER2). ESM-2 starts below AbLang2
+at Delta Residue (0.613 vs 0.635) and finishes above at Delta Res + Wildtype
+(0.695 vs 0.669). AbLang2 is stable across strategies; ESM-2 gains more from
+additional context (+0.093 vs +0.034).
+
+**Figure 2: CDR constraint sweep**
+Line plots for all three formulations (batch-mean, pairwise margin=0, pairwise
+margin=0.1) x 2 models. Monotonic degradation with constraint strength holds
+across all formulations and both models. Batch-mean is the most robust.
+
+**Figure 3: Per-dataset Spearman (best model, Exp 3 lambda=0)**
+
+| Dataset | ESM-2 | AbLang2 |
+|---|---|---|
+| Ang2 2017 G6 | 0.829 | 0.761 |
+| VEGF 2017b G6 | 0.782 | 0.680 |
+| HER2 2021 trastuzumab | 0.707 (N=18) | 0.519 (N=18) |
+| EGFR 2013 Cetuximab | 0.662 | 0.591 |
+| lysozyme 2019 D441 | 0.574 | 0.626 |
+
+ESM-2 leads on 4 of 5 datasets (excl HER2). AbLang2 leads on lysozyme 2019 D441
+(0.626 vs 0.574).
+
+---
+
 ## Still To Do
 
-- NB07: analysis, figures, and write-up
 - NB04 housekeeping: update md-dms-dist-out with corrected HER2 description
   (spike at 1.0, secondary peak ~0.3-0.4, near-empty 0.0-0.2 -- NOT bimodal at 0.0)
 - train_sabdab / evaluate_sabdab (Task 2, if time permits)
