@@ -1375,8 +1375,6 @@ ESM-2 leads on 4 of 5 datasets (excl HER2). AbLang2 leads on lysozyme 2019 D441
 
 ## Still To Do
 
-- NB04 housekeeping: update md-dms-dist-out with corrected HER2 description
-  (spike at 1.0, secondary peak ~0.3-0.4, near-empty 0.0-0.2 -- NOT bimodal at 0.0)
 - train_sabdab / evaluate_sabdab (Task 2, if time permits)
 
 ### Later
