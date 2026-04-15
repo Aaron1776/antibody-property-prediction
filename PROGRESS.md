@@ -125,7 +125,7 @@ The per-mutation region label is pre-computed and stored in abagym_antibody.csv 
 Encodes the biological prior: CDR mutations should have higher predicted effect magnitude than framework mutations.
 
 ```
-constraint_loss = mean(ReLU(|FR_predicted| - |CDR_predicted|))
+constraint_loss = ReLU(mean(|FR_predicted|) - mean(|CDR_predicted|))
 total_loss = task_loss + lambda * constraint_loss
 ```
 
@@ -1242,12 +1242,55 @@ This is the central empirical finding of the project.
 
 ---
 
+### Experiment 6: CDR Constraint Lambda Sweep (Both)
+
+**Strategy:** Exp 3 (delta residue + wildtype), best-performing from Exp 2-5.
+**Lambdas:** [0, 0.1, 0.5, 1.0] x 2 models = 8 runs. Lambda=0 reproduces Exp 3 baseline exactly.
+
+**Test results (excl HER2):**
+
+| Model | λ=0.0 | λ=0.1 | λ=0.5 | λ=1.0 |
+|---|---|---|---|---|
+| ESM-2 | 0.6946 | 0.6927 | 0.7030 | 0.6219 |
+| AbLang2 | 0.6693 | 0.6622 | 0.6614 | 0.6459 |
+
+**Seed robustness check (ESM-2 λ=0.5 vs λ=0.0):**
+
+| Seed | λ=0.0 | λ=0.5 | Delta |
+|---|---|---|---|
+| 42 | 0.6946 | 0.7030 | +0.0084 |
+| 0  | 0.6910 | 0.6767 | -0.0143 |
+| 1  | 0.6396 | 0.6387 | -0.0009 |
+
+**Key findings:**
+
+ESM-2 (null result): The λ=0.5 peak (+0.008) does not hold across seeds. Deltas are
++0.008, -0.014, -0.001 across seeds 42, 0, 1. Effect is within noise. The constraint
+has no reliable impact on ESM-2 despite EDA showing ESM-2 encodes the inverse CDR prior.
+The batch-mean constraint may be too weak to correct an entrenched geometric bias.
+
+AbLang2 (negative, consistent): Monotonic decline at every λ > 0. Drop grows with λ
+(0.669 → 0.662 → 0.661 → 0.646). Consistent with EDA finding that AbLang2 residue-level
+embeddings already encode the correct CDR prior (CDR > FR at token level, Finding 8).
+The constraint is redundant and adds gradient noise that hurts task performance.
+
+**The neurosymbolic finding:**
+The constraint interacts with each model's geometry in the predicted direction:
+irrelevant to ESM-2 (no reliable correction of its inverse prior) and harmful to
+AbLang2 (redundant with its already-correct geometry). The negative AbLang2 result
+is indirect evidence that AbLang2's representations encode biologically meaningful
+CDR/FR structure internally.
+
+**Best overall result:** ESM-2 Exp 3 λ=0.0, test Spearman excl HER2 = 0.6946.
+
+---
+
 ## Still To Do
 
-### Immediate (NB05/06)
-- Exp 6: CDR constraint lambda sweep [0, 0.1, 0.5, 1.0] on Exp 3 strategy, both models
-- Run summary table cells in both notebooks
-- Commit and push NB05 notebooks + PROGRESS.md
+- NB06: commit final notebook with all markdown cells filled
+- Update MEMORY.md with final results
+- NB07: analysis, figures, and write-up
+- train_sabdab / evaluate_sabdab (Task 2, if time permits)
 
 ### After Exp 2-5
 - Exp 6: CDR constraint lambda sweep [0, 0.1, 0.5, 1.0] on best strategy, both models
