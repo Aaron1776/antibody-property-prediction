@@ -24,7 +24,11 @@ from tqdm import tqdm
 from src.config import ABAGYM_DATASETS, set_seed
 from src.data.datasets import AbAgymDataset, SAbDabDataset
 from src.models.mlp import MLP
-from src.training.losses import cdr_constraint_loss, combined_loss
+from src.training.losses import (
+    cdr_constraint_loss,
+    pairwise_cdr_constraint_loss,
+    combined_loss,
+)
 
 import wandb
 
@@ -55,6 +59,12 @@ class TrainConfig:
     lambda_cdr:
         CDR constraint loss weight. 0.0 = unconstrained baseline.
         Sweep: [0, 0.1, 0.5, 1.0].
+    constraint_type:
+        'batch_mean' (original) or 'pairwise' (ranking loss extension).
+        Ignored when lambda_cdr = 0.
+    constraint_margin:
+        Margin for pairwise constraint. Ignored for batch_mean.
+        Default 0.1.
     seed:
         Random seed for reproducibility.
     patience:
@@ -72,6 +82,8 @@ class TrainConfig:
     hidden_dims: List[int] = field(default_factory=lambda: [256, 128])
     dropout: float = 0.1
     lambda_cdr: float = 0.0
+    constraint_type: str = 'batch_mean'
+    constraint_margin: float = 0.1
     seed: int = 42
     patience: int = 10
     wandb_project: str = 'antibody-property-prediction'
@@ -150,6 +162,8 @@ def train_abagym(
             'hidden_dims': config.hidden_dims,
             'dropout': config.dropout,
             'lambda_cdr': config.lambda_cdr,
+            'constraint_type': config.constraint_type,
+            'constraint_margin': config.constraint_margin,
             'seed': config.seed,
             'input_dim': input_dim,
         },
@@ -181,7 +195,12 @@ def train_abagym(
             task_loss = mse_fn(preds, y)
 
             if config.lambda_cdr > 0:
-                constraint = cdr_constraint_loss(preds, meta['region'])
+                if config.constraint_type == 'pairwise':
+                    constraint = pairwise_cdr_constraint_loss(
+                        preds, meta['region'], margin=config.constraint_margin
+                    )
+                else:
+                    constraint = cdr_constraint_loss(preds, meta['region'])
                 loss = combined_loss(task_loss, constraint, config.lambda_cdr)
             else:
                 loss = task_loss

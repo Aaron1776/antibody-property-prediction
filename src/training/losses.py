@@ -6,11 +6,18 @@ CDR constraint loss (Task 1 only):
     Encodes the biological prior that CDR mutations should have higher
     predicted effect magnitude than framework mutations.
 
-    constraint_loss = ReLU(mean(|FR_predicted|) - mean(|CDR_predicted|))
+    Two formulations are available:
 
-    This loss fires only when the model predicts a larger absolute effect
-    for FR mutations than for CDR mutations. It is zero when the model
-    already respects the prior.
+    Batch-mean (original):
+        constraint_loss = ReLU(mean(|FR_predicted|) - mean(|CDR_predicted|))
+        Fires when group means violate the prior. One gradient term per batch.
+
+    Pairwise ranking (extension):
+        constraint_loss = mean over all (FR, CDR) pairs of
+            ReLU(|FR_predicted| - |CDR_predicted| + margin)
+        Fires on every individual FR-CDR pair. O(n_fr x n_cdr) gradient
+        terms per batch. Enforces a minimum margin between CDR and FR
+        absolute predictions.
 
     Applied to AbAgym (Task 1) only. Not applied to SAbDab (no CDR mapping).
 """
@@ -77,6 +84,71 @@ def cdr_constraint_loss(
     cdr_abs_mean = predictions[cdr_mask].abs().mean()
 
     return F.relu(fr_abs_mean - cdr_abs_mean)
+
+
+def pairwise_cdr_constraint_loss(
+    predictions: torch.Tensor,
+    regions: Union[List[str], torch.Tensor],
+    margin: float = 0.1,
+) -> torch.Tensor:
+    """Pairwise ranking CDR constraint loss.
+
+    For every (FR, CDR) pair in the batch, penalizes cases where the
+    absolute FR prediction exceeds the absolute CDR prediction by more
+    than -margin (i.e., where |FR| > |CDR| - margin).
+
+    loss = mean_{i in FR, j in CDR} ReLU(|pred_i| - |pred_j| + margin)
+
+    This enforces that every CDR prediction exceeds every FR prediction
+    by at least `margin`. It is zero only when all |CDR_pred| >= all
+    |FR_pred| + margin.
+
+    Compared to the batch-mean formulation:
+    - Fires on O(n_fr x n_cdr) pairs instead of one group-mean comparison
+    - Provides a richer gradient signal per batch
+    - Enforces a minimum separation (margin) rather than just mean ordering
+
+    Parameters
+    ----------
+    predictions:
+        (batch_size,) float tensor of scalar predictions.
+    regions:
+        List or array of region labels for each sample in the batch.
+        Valid values: 'CDR_H1', 'CDR_H2', 'CDR_H3', 'CDR_L1', 'CDR_L2',
+        'CDR_L3', 'FR'.
+    margin:
+        Minimum required gap: |CDR_pred| must exceed |FR_pred| by at
+        least this value to contribute zero loss. Default 0.1.
+
+    Returns
+    -------
+    Scalar tensor. Returns 0.0 (as a tensor) if the batch has no FR
+    mutations or no CDR mutations.
+    """
+    if not isinstance(regions, list):
+        regions = list(regions)
+
+    fr_mask = torch.tensor(
+        [r == FR_REGION for r in regions],
+        dtype=torch.bool,
+        device=predictions.device,
+    )
+    cdr_mask = torch.tensor(
+        [r in CDR_REGIONS for r in regions],
+        dtype=torch.bool,
+        device=predictions.device,
+    )
+
+    if fr_mask.sum() == 0 or cdr_mask.sum() == 0:
+        return torch.tensor(0.0, device=predictions.device, requires_grad=True)
+
+    fr_abs = predictions[fr_mask].abs()    # (n_fr,)
+    cdr_abs = predictions[cdr_mask].abs()  # (n_cdr,)
+
+    # All pairwise differences: (n_fr, n_cdr)
+    diffs = fr_abs.unsqueeze(1) - cdr_abs.unsqueeze(0)
+
+    return F.relu(diffs + margin).mean()
 
 
 def combined_loss(
